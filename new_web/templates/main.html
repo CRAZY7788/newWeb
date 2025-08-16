@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>合规工作台 · Prototype v6 (Auth)</title>
+  <meta name="color-scheme" content="light dark">
+  <style>
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{height:100%}
+    body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;color:#111827;background:#f7f7fb}
+    :root{--bg:#ffffff;--text:#111827;--muted:#6b7280;--border:#e5e7eb;--brand:#2563eb;--brand-2:#0ea5e9;--card:#ffffff;--shadow:0 6px 24px rgba(0,0,0,.08);--ok:#16a34a;--danger:#ef4444}
+    @media (prefers-color-scheme: dark){
+      body{color:#e5e7eb;background:#0b1120}
+      :root{--bg:#0b1120;--text:#e5e7eb;--muted:#94a3b8;--border:#1f2937;--brand:#60a5fa;--brand-2:#38bdf8;--card:#0f172a;--shadow:0 6px 24px rgba(0,0,0,.35);--ok:#22c55e;--danger:#f87171}
+    }
+    .app{display:grid; grid-template-columns: 260px 1fr; grid-template-rows: 56px 1fr; height:100vh}
+    .topbar{grid-column:1 / span 2; display:flex; align-items:center; gap:.6rem; padding:0 .6rem; border-bottom:1px solid var(--border); background:var(--card)}
+    .brand{font-weight:800; letter-spacing:.3px}
+    .sep{flex:1}
+    .search{position:relative; width:min(460px,40vw)}
+    .search input{width:100%; padding:.6rem 2.2rem .6rem .8rem; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--text)}
+    .search svg{position:absolute; right:.5rem; top:50%; transform:translateY(-50%); opacity:.6}
+    .btn{display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .7rem; border:1px solid var(--border); border-radius:10px; background:var(--card); cursor:pointer; user-select:none}
+    .btn.primary{background:linear-gradient(180deg,var(--brand),var(--brand-2)); color:#fff; border-color:transparent}
+    .btn.icon{padding:.4rem .5rem}
+    .sidebar{border-right:1px solid var(--border); background:var(--card); padding:.6rem; display:flex; flex-direction:column; gap:.6rem; overflow:auto}
+    .group-title{font-size:.9rem; color:var(--muted); padding:.2rem .4rem}
+    .nav-item{padding:.7rem .8rem; border:1px solid var(--border); background:var(--bg); border-radius:10px; cursor:pointer; display:flex; align-items:center; justify-content:space-between}
+    .nav-item.active{outline:2px solid color-mix(in srgb, var(--brand), transparent 60%); border-color:var(--brand)}
+    .nav-item .badge{font-size:.75rem; color:#fff; background:var(--brand); padding:.1rem .45rem; border-radius:999px}
+    .spacer{flex:1}
+    .template{margin-top:auto; border-style:dashed}
+    .main{padding:1rem; overflow:auto}
+    .panel{background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1rem; box-shadow:var(--shadow)}
+    .crumbs{display:flex; align-items:center; gap:.4rem; color:var(--muted); font-size:.9rem; margin-bottom:.6rem; flex-wrap:wrap}
+    .crumbs .slash{opacity:.4}
+    .h-scroll{display:flex; gap:.8rem; overflow:auto; padding-bottom:.6rem}
+    .status-card{flex:0 0 280px; border:1px solid var(--border); border-radius:12px; background:var(--bg); padding:1rem; cursor:pointer}
+    .status-card h3{margin:.2rem 0 .4rem}
+    .bar{height:8px; border-radius:6px; background:color-mix(in srgb, var(--brand), white 70%); position:relative; overflow:hidden; margin:.6rem 0 0}
+    .bar > span{position:absolute; left:0; top:0; bottom:0; width:40%; background:linear-gradient(90deg,var(--brand),var(--brand-2))}
+    .meta{display:flex; justify-content:space-between; color:var(--muted); font-size:.9rem}
+    .list{max-height:60vh; overflow:auto; border:1px solid var(--border); border-radius:10px; background:var(--bg)}
+    .row{display:grid; grid-template-columns: 2ch 1fr 120px 120px 120px; gap:.6rem; align-items:center; padding:.7rem .8rem; border-bottom:1px solid var(--border)}
+    .row:last-child{border-bottom:0}
+    .row .idx{text-align:right; color:var(--muted)}
+    .row .tag{justify-self:start; font-size:.75rem; padding:.1rem .4rem; border-radius:999px; border:1px solid var(--border)}
+    .back{margin-top:.8rem}
+    .file-list .row{grid-template-columns: 2ch 1fr 100px 120px 120px}
+    .file-list .owner{font-size:.9rem; color:var(--muted)}
+    .version-card{flex:0 0 240px; border:1px dashed var(--border); border-radius:12px; padding:1rem; background:var(--bg)}
+    /* overlay & mobile sidebar */
+    .overlay{position:fixed; inset:0; background:rgba(0,0,0,.25); display:none; z-index:45}
+    .overlay.open{display:block}
+    @media (max-width: 860px){
+      .app{grid-template-columns: 1fr; grid-template-rows: 56px 1fr}
+      .sidebar{position:fixed; left:0; top:56px; bottom:0; width:260px; transform:translateX(-100%); transition:.25s ease; z-index:50}
+      .sidebar.open{transform:translateX(0)}
+      .main{padding: .8rem}
+    }
+    /* context menu modal */
+    .modal{position:fixed; inset:0; display:none; align-items:flex-start; justify-content:flex-start; background:transparent; z-index:60}
+    .modal.open{display:flex}
+    .menu{min-width:180px; background:var(--card); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); overflow:hidden}
+    .menu button{display:block; width:100%; text-align:left; padding:.6rem .8rem; border:0; background:transparent; color:var(--text); cursor:pointer}
+    .menu button:hover{background:color-mix(in srgb, var(--brand), transparent 90%)}
+    /* form modal */
+    .dialog{position:fixed; inset:0; background:rgba(0,0,0,.25); display:none; align-items:center; justify-content:center; z-index:70}
+    .dialog.open{display:flex}
+    .card{width:min(520px,92vw); background:var(--card); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); padding:1rem}
+    .card h3{margin:.3rem 0 1rem}
+    .grid{display:grid; gap:.8rem}
+    .grid.two{grid-template-columns: 1fr 1fr}
+    input,textarea,select{width:100%; padding:.6rem .8rem; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--text)}
+    textarea{resize:vertical; min-height:80px}
+    .actions{display:flex; gap:.6rem; justify-content:flex-end; margin-top:.6rem}
+    /* toast */
+    .toasts{position:fixed; right:14px; top:14px; display:grid; gap:.6rem; z-index:80}
+    .toast{background:var(--card); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); padding:.6rem .8rem; min-width:220px}
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Top bar -->
+    <div class="topbar">
+      <button id="toggleSidebar" class="btn icon" title="菜单">☰</button>
+      <div class="brand">欢迎 <span id="who">xxx</span>！</div>
+      <div class="sep"></div>
+      <div class="search" role="search">
+        <input id="searchInput" type="search" placeholder="Search…" aria-label="Search"/>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M21 21l-4.3-4.3M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <label class="btn">
+        角色
+        <select id="roleSelect" style="border:0; background:transparent; outline:0">
+          <option value="viewer">viewer</option>
+          <option value="editor">editor</option>
+          <option value="approver" selected>approver</option>
+          <option value="admin">admin</option>
+        </select>
+      </label>
+      <a href="/logout" class="btn" id="loginBtn">Logout</a>
+      <button id="themeBtn" class="btn" title="主题">🌓</button>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar" aria-label="侧边栏" id="sidebar">
+      <div class="group-title">待验收文件</div>
+      <div class="nav-item active" data-type="inbox"><span>待处理事项</span><span class="badge" id="inboxBadge">0</span></div>
+      <div class="group-title">项目</div>
+      <div class="nav-item" data-type="project" data-project="项目 1">项目 1</div>
+      <div class="nav-item" data-type="project" data-project="项目 2">项目 2</div>
+      <div class="nav-item" data-type="project" data-project="项目 3">项目 3</div>
+      <div class="spacer"></div>
+      <div class="nav-item template" data-type="template">模板库</div>
+    </aside>
+    <div class="overlay" id="overlay"></div>
+
+    <!-- Main content -->
+    <main class="main">
+      <!-- Inbox -->
+      <section id="acceptanceView" class="panel" aria-label="待验收文件">
+        <div class="crumbs"><span>待验收文件</span><span class="slash">/</span><span>列表</span></div>
+        <div class="list" id="acceptList"></div>
+        <p style="color:var(--muted); margin:.4rem 0 0">提示：左双击下载/打开；右键/长按可选择“验收”或“拒绝”。</p>
+      </section>
+
+      <!-- A: Project board -->
+      <section id="boardView" class="panel" aria-label="项目状态看板" hidden>
+        <div class="crumbs"><span id="boardTitle">项目 1</span><span class="slash">/</span><span>地区状态</span></div>
+        <div class="h-scroll" id="regionScroller">
+          <article class="status-card" data-region="EU">
+            <h3>EU · MDR</h3>
+            <p class="meta"><span>Status: In progress</span> <span>#1</span></p>
+            <div class="bar"><span style="width:55%"></span></div>
+          </article>
+          <article class="status-card" data-region="China">
+            <h3>China · NMPA</h3>
+            <p class="meta"><span>Status: Todo</span> <span>#2</span></p>
+            <div class="bar"><span style="width:20%"></span></div>
+          </article>
+          <article class="status-card" data-region="FDA">
+            <h3>US · FDA</h3>
+            <p class="meta"><span>Status: Draft</span> <span>#3</span></p>
+            <div class="bar"><span style="width:35%"></span></div>
+          </article>
+          <article class="status-card" data-region="UK">
+            <h3>UK · MHRA</h3>
+            <p class="meta"><span>Status: Pending</span> <span>#4</span></p>
+            <div class="bar"><span style="width:10%"></span></div>
+          </article>
+        </div>
+        <p style="color:var(--muted); margin:.3rem 0 0">提示：点击某个地区进入明细列表。</p>
+      </section>
+
+      <!-- B: Region list -->
+      <section id="detailView" class="panel" aria-label="地区详情" hidden>
+        <div class="crumbs"><span id="detailProject">项目 1</span><span class="slash">/</span><span id="detailRegion">China · NMPA</span></div>
+        <div class="list" id="detailList" role="list"></div>
+        <div class="back"><button class="btn" data-back="board">← 返回</button></div>
+      </section>
+
+      <!-- C: Files -->
+      <section id="fileView" class="panel" aria-label="文件列表" hidden>
+        <div class="crumbs"><span id="fileProject">项目 1</span><span class="slash">/</span><span id="fileRegion">China · NMPA</span><span class="slash">/</span><span id="fileGroup">占位条目 1</span></div>
+        <div class="list file-list" id="fileList" role="list"></div>
+        <div class="back"><button class="btn" data-back="detail">← 返回</button></div>
+      </section>
+
+      <!-- D: Versions -->
+      <section id="versionView" class="panel" aria-label="历史版本" hidden>
+        <div class="crumbs"><span id="verProject">项目 1</span><span class="slash">/</span><span id="verRegion">China · NMPA</span><span class="slash">/</span><span id="verFile">文件 A</span><span class="slash">/</span><span>历史版本</span></div>
+        <div class="h-scroll" id="versionScroller"></div>
+        <div class="back"><button class="btn" data-back="files">← 返回</button></div>
+      </section>
+    </main>
+  </div>
+
+  <!-- context menu modal -->
+  <div class="modal" id="ctxModal"><div class="menu" id="ctxMenu" role="menu" aria-label="菜单"></div></div>
+
+  <!-- acceptance / reject dialog -->
+  <div class="dialog" id="formDialog">
+    <div class="card">
+      <h3 id="dialogTitle">验收</h3>
+      <form id="dialogForm" class="grid">
+        <div class="grid two" id="authFields">
+          <label>验收者用户名<input name="user" required></label>
+          <label>密码<input name="pwd" type="password" required></label>
+        </div>
+        <label id="roleField">验收者职位<input name="role" required></label>
+        <label id="reasonField" hidden>拒绝原因<textarea name="reason"></textarea></label>
+        <div class="actions">
+          <button type="button" class="btn" id="cancelDialog">取消</button>
+          <button type="submit" class="btn primary" id="submitDialog">提交</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="toasts" id="toasts"></div>
+
+  <script>
+    // ---------- Utils ----------
+    const $ = (s, c=document)=>c.querySelector(s);
+    const $$ = (s, c=document)=>Array.from(c.querySelectorAll(s));
+    function toast(text, type='ok', timeout=1800){
+      const el=document.createElement('div'); el.className='toast'; el.textContent=text;
+      $('#toasts').appendChild(el); setTimeout(()=>{ el.style.opacity=.0; setTimeout(()=>el.remove(), 300)}, timeout);
+    }
+    const views = { inbox: $('#acceptanceView'), board: $('#boardView'), detail: $('#detailView'), files: $('#fileView'), versions: $('#versionView') };
+    function show(id){ Object.values(views).forEach(v => v.hidden = true); views[id].hidden = false; STATE.view=id; syncHash(); }
+
+    // ---------- State ----------
+    const STATE = { view: 'inbox', project:'项目 1', region:'China', group:null, file:null };
+    const PERM = { role: 'approver' }; // viewer/editor/approver/admin
+
+    // ---------- Topbar ----------
+    const themeBtn=$('#themeBtn'); const root=document.documentElement; const savedTheme=localStorage.getItem('theme'); if(savedTheme==='dark'){ root.classList.add('dark'); }
+    themeBtn.addEventListener('click', ()=>{ root.classList.toggle('dark'); localStorage.setItem('theme', root.classList.contains('dark') ? 'dark' : 'light'); });
+
+    // who from backend
+    fetch('/api/me').then(r=>r.json()).then(j=>{ if(j.ok && j.user){ $('#who').textContent = j.user.username; } });
+
+    // ---------- Sidebar / mobile ----------
+    const sidebar=$('#sidebar'), overlay=$('#overlay'), toggleSidebar=$('#toggleSidebar');
+    function openSidebar(){ sidebar.classList.add('open'); overlay.classList.add('open'); }
+    function closeSidebar(){ sidebar.classList.remove('open'); overlay.classList.remove('open'); }
+    toggleSidebar.addEventListener('click', ()=> sidebar.classList.contains('open') ? closeSidebar() : openSidebar());
+    overlay.addEventListener('click', closeSidebar);
+
+    // search filter
+    $('#searchInput').addEventListener('input', (e)=>{
+      const q = e.target.value.trim().toLowerCase();
+      $$('.sidebar .nav-item[data-type="project"]').forEach(n => n.style.display = (n.dataset.project.toLowerCase().includes(q) || q==='') ? '' : 'none');
+    });
+
+    // ---------- Hash routing ----------
+    function syncHash(){
+      const p=new URLSearchParams(); p.set('view',STATE.view); if(STATE.project) p.set('project',STATE.project);
+      if(STATE.region) p.set('region',STATE.region); if(STATE.group) p.set('group',STATE.group); if(STATE.file) p.set('file',STATE.file);
+      location.hash = p.toString();
+    }
+    function parseHash(){
+      const p = new URLSearchParams(location.hash.replace(/^#/,''));
+      STATE.view = p.get('view') || STATE.view; STATE.project = p.get('project') || STATE.project;
+      STATE.region = p.get('region') || STATE.region; STATE.group = p.get('group'); STATE.file = p.get('file');
+    }
+    window.addEventListener('hashchange', ()=>{ parseHash(); routeToState(); });
+
+    // ---------- Sidebar nav ----------
+    const boardTitle=$('#boardTitle');
+    $('.sidebar').addEventListener('click', (e)=>{
+      const item=e.target.closest('.nav-item'); if(!item) return;
+      $$('.nav-item').forEach(n=>n.classList.remove('active')); item.classList.add('active');
+      const type=item.dataset.type;
+      if(type==='project'){
+        const name=item.dataset.project; STATE.project=name;
+        boardTitle.textContent=name; $('#detailProject').textContent=name; $('#fileProject').textContent=name; $('#verProject').textContent=name;
+        show('board'); closeSidebar();
+      }else if(type==='inbox'){ show('inbox'); closeSidebar(); }
+      else if(type==='template'){ boardTitle.textContent='模板库（占位）'; show('board'); closeSidebar(); }
+    });
+
+    // ---------- Inbox (Acceptance) ----------
+    const acceptList=$('#acceptList'), inboxBadge=$('#inboxBadge');
+    async function loadAcceptance(){
+      try{
+        const res = await fetch('/acceptance-data.json', {cache:'no-store'}); const json=await res.json();
+        DATA.acceptance = json;
+      }catch(e){
+        DATA.acceptance = Array.from({length:6}).map((_,i)=>({id:'ACC-'+(1000+i),name:`提交文档_${i+1}.pdf`,url:`/static/submission_${i+1}.pdf`,date:new Date().toLocaleDateString(),owner:'user'+(i+1),status:'待验收'}));
+      }
+      refreshAcceptList();
+    }
+    const DATA = { acceptance: [] };
+    function refreshAcceptList(){
+      acceptList.innerHTML=''; DATA.acceptance.forEach((d,idx)=>{
+        const row=document.createElement('div'); row.className='row'; row.dataset.id=d.id; row.dataset.url=d.url;
+        row.innerHTML = `<span class="idx">${idx+1}.</span><span>${d.name}</span><span class="tag">${d.status}</span><span>${d.date}</span><span>${d.owner}</span>`;
+        row.ondblclick = ()=>{ const a=document.createElement('a'); a.href=d.url; a.target='_blank'; a.download=d.name; document.body.appendChild(a); a.click(); a.remove(); toast('开始下载/打开：'+d.name); };
+        row.addEventListener('contextmenu', (e)=> openAcceptMenu(e,row));
+        addLongPress(row, (e)=> openAcceptMenu(e,row));
+        acceptList.appendChild(row);
+      });
+      inboxBadge.textContent = DATA.acceptance.length;
+    }
+    function openAcceptMenu(e,row){
+      e.preventDefault();
+      const items=[];
+      items.push({text:'验收', action:()=> openDialog('approve', row)});
+      items.push({text:'拒绝', action:()=> openDialog('reject', row)});
+      openContextMenu(e, items);
+    }
+
+    // ---------- Context menu (generic) ----------
+    const ctxModal=$('#ctxModal'), ctxMenu=$('#ctxMenu');
+    function openContextMenu(e, items){
+      ctxMenu.innerHTML='';
+      items.forEach(it=>{ const b=document.createElement('button'); b.textContent=it.text; b.onclick=()=>{ closeContextMenu(); it.action(); }; ctxMenu.appendChild(b); });
+      ctxModal.classList.add('open'); ctxMenu.style.position='absolute'; ctxMenu.style.left=e.clientX+'px'; ctxMenu.style.top=e.clientY+'px';
+    }
+    function closeContextMenu(){ ctxModal.classList.remove('open'); }
+    ctxModal.addEventListener('click', (e)=>{ if(e.target===ctxModal) closeContextMenu(); });
+    function addLongPress(el, cb){ let t; el.addEventListener('touchstart', (e)=>{ t=setTimeout(()=>cb(e.changedTouches[0]),500); },{passive:true}); el.addEventListener('touchend',()=>clearTimeout(t),{passive:true}); el.addEventListener('touchmove',()=>clearTimeout(t),{passive:true}); }
+
+    // ---------- Dialog (approve / reject) ----------
+    const formDialog=$('#formDialog'), dialogTitle=$('#dialogTitle'), dialogForm=$('#dialogForm'), roleField=$('#roleField'), reasonField=$('#reasonField'), authFields=$('#authFields');
+    $('#cancelDialog').addEventListener('click', ()=> formDialog.classList.remove('open'));
+    function openDialog(type,row){
+      if(type==='approve'){ dialogTitle.textContent='验收'; roleField.hidden=false; reasonField.hidden=true; authFields.hidden=false; }
+      else { dialogTitle.textContent='拒绝'; roleField.hidden=true; reasonField.hidden=false; authFields.hidden=false; }
+      dialogForm.reset(); formDialog.classList.add('open');
+      dialogForm.onsubmit = (e)=>{
+        e.preventDefault();
+        const id=row.dataset.id; const idx=DATA.acceptance.findIndex(x=>x.id===id);
+        if(idx>-1){ DATA.acceptance.splice(idx,1); }
+        formDialog.classList.remove('open'); refreshAcceptList(); toast((type==='approve'?'已验收：':'已拒绝：')+id);
+      };
+    }
+
+    // ---------- Project flow ----------
+    const regionScroller=$('#regionScroller'), detailRegion=$('#detailRegion'), detailList=$('#detailList');
+    regionScroller?.addEventListener('click', (e)=>{
+      const card=e.target.closest('.status-card'); if(!card) return; const region=card.dataset.region;
+      detailRegion.textContent = (region==='China') ? 'China · NMPA' : region;
+      $('#fileRegion').textContent = detailRegion.textContent; $('#verRegion').textContent=detailRegion.textContent;
+      populateDetail(region); STATE.region=region; show('detail');
+    });
+    function populateDetail(region){
+      detailList.innerHTML=''; for(let i=1;i<=12;i++){
+        const row=document.createElement('div'); row.className='row'; row.dataset.group=`占位条目 ${i}`;
+        row.innerHTML = `<span class="idx">${i}.</span><span><b>${region} 组 · </b>${row.dataset.group}</span><span class="tag">Class ${(i%3==1)?'A':(i%3==2)?'B':'C'}</span><span>${new Date(2025,i%12,i).toLocaleDateString()}</span><span>Owner ${(i%4)+1}</span>`;
+        row.ondblclick = ()=> openFiles(row.dataset.group); detailList.appendChild(row);
+      }
+    }
+
+    const fileList=$('#fileList'), fileGroup=$('#fileGroup');
+    function openFiles(groupName){
+      fileGroup.textContent=groupName; fileList.innerHTML=''; STATE.group=groupName;
+      ['文件 A','文件 B','文件 C','文件 D'].forEach((name,idx)=>{
+        const row=document.createElement('div'); row.className='row'; row.dataset.file=name; row.dataset.checkedOut='false';
+        row.innerHTML = `<span class="idx">${idx+1}.</span><span>${name}</span><span class="tag state">草稿</span><span class="owner">owner ${idx+1}</span><span class="owner">${new Date().toLocaleDateString()}</span>`;
+        row.ondblclick = ()=> toast('打开：'+name);
+        row.addEventListener('contextmenu', (e)=> openFileMenu(e,row));
+        addLongPress(row, (e)=> openFileMenu(e,row));
+        fileList.appendChild(row);
+      });
+      show('files');
+    }
+    function openFileMenu(e,row){
+      e.preventDefault();
+      const items=[]; items.push({text: row.dataset.checkedOut==='true'?'Check in':'Check out', action:()=> toggleCheckout(row)}); items.push({text:'历史版本', action:()=> openVersionsFromRow(row)});
+      openContextMenu(e, items);
+    }
+    function toggleCheckout(row){ const flag=row.dataset.checkedOut==='true'; row.dataset.checkedOut=(!flag).toString(); row.querySelector('.state').textContent = flag ? '草稿' : '已借出'; toast(flag?'已 Check in':'已 Check out'); }
+
+    // Versions
+    function openVersionsFromRow(row){ const name=row.dataset.file; $('#verFile').textContent=name; populateVersions(name); STATE.file=name; show('versions'); }
+    function populateVersions(fileName){
+      const scroller=$('#versionScroller'); scroller.innerHTML=''; ['V1','V2','V2.1','V2.2','V3'].forEach((v,i)=>{
+        const card=document.createElement('article'); card.className='version-card';
+        card.innerHTML = `<h3>${v}</h3><p style="color:var(--muted)">${fileName} 的历史版本</p><p class="meta"><span>${new Date(2024+i,i%12,10+i).toLocaleDateString()}</span><span>by User${i+1}</span></p>`;
+        scroller.appendChild(card);
+      });
+    }
+
+    // backs
+    $$('.back .btn').forEach(btn=> btn.addEventListener('click', ()=> { show(btn.dataset.back); if(btn.dataset.back==='detail') STATE.file=null; if(btn.dataset.back==='files') STATE.file=null; }) );
+
+    // route
+    function routeToState(){
+      $$('.sidebar .nav-item').forEach(n=>n.classList.remove('active'));
+      if(STATE.view==='inbox') $('.sidebar .nav-item[data-type="inbox"]').classList.add('active');
+      if(STATE.view!=='inbox'){ $(`.sidebar .nav-item[data-type="project"][data-project="${STATE.project}"]`)?.classList.add('active'); }
+      $('#boardTitle').textContent=STATE.project; $('#detailProject').textContent=STATE.project; $('#fileProject').textContent=STATE.project; $('#verProject').textContent=STATE.project;
+      if(STATE.view==='inbox'){ show('inbox'); }
+      else if(STATE.view==='board'){ show('board'); }
+      else if(STATE.view==='detail'){ populateDetail(STATE.region); show('detail'); }
+      else if(STATE.view==='files'){ populateDetail(STATE.region); openFiles(STATE.group||'占位条目 1'); }
+      else if(STATE.view==='versions'){ populateDetail(STATE.region); openFiles(STATE.group||'占位条目 1'); openVersionsFromRow({dataset:{file: STATE.file||'文件 A'}}); }
+    }
+
+    // init
+    parseHash(); routeToState(); loadAcceptance();
+  </script>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+</body>
+</html>

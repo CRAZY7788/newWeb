@@ -1,0 +1,26 @@
+{
+  "pending_files": [
+    {
+      "id": "f001",
+      "name": "医疗软件需求文档_v1.0.docx",
+      "uploader": "Alice",
+      "upload_time": "2025-08-10 14:30"
+    },
+    {
+      "id": "f002",
+      "name": "软件测试计划_v2.1.pdf",
+      "uploader": "Bob",
+      "upload_time": "2025-08-12 09:20"
+    }
+  ],
+  "history_versions": {
+    "f001": [
+      { "version": "1.0", "updated_by": "Alice", "date": "2025-08-10" },
+      { "version": "1.1", "updated_by": "Charlie", "date": "2025-08-13" }
+    ],
+    "f002": [
+      { "version": "2.0", "updated_by": "Bob", "date": "2025-08-12" },
+      { "version": "2.1", "updated_by": "David", "date": "2025-08-14" }
+    ]
+  ]
+}
