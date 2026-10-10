@@ -47,9 +47,16 @@
     .row .idx{text-align:right; color:var(--muted)}
     .row .tag{justify-self:start; font-size:.75rem; padding:.1rem .4rem; border-radius:999px; border:1px solid var(--border)}
     .back{margin-top:.8rem}
-    .file-list .row{grid-template-columns: 2ch 1fr 100px 120px 120px}
+    .file-list .row{grid-template-columns: 2ch 1.4fr 90px 80px 90px 110px}
     .file-list .owner{font-size:.9rem; color:var(--muted)}
-    .version-card{flex:0 0 240px; border:1px dashed var(--border); border-radius:12px; padding:1rem; background:var(--bg)}
+    .version-card{flex:0 0 260px; border:1px dashed var(--border); border-radius:12px; padding:1rem; background:var(--bg); display:flex; flex-direction:column; gap:.35rem}
+    .toolbar{display:flex; gap:.6rem; align-items:center; margin-bottom:.8rem; flex-wrap:wrap}
+    .hash{font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.75rem; color:var(--muted); word-break:break-all}
+    .trace-table{width:100%; border-collapse:collapse; font-size:.9rem}
+    .trace-table th,.trace-table td{border-bottom:1px solid var(--border); padding:.5rem .4rem; text-align:left; vertical-align:top}
+    .muted{color:var(--muted)}
+    .tag.out{color:var(--danger); border-color:var(--danger)}
+    .tag.ok{color:var(--ok); border-color:var(--ok)}
     /* overlay & mobile sidebar */
     .overlay{position:fixed; inset:0; background:rgba(0,0,0,.25); display:none; z-index:45}
     .overlay.open{display:block}
@@ -95,10 +102,10 @@
       </div>
       <label class="btn">
         角色
-        <select id="roleSelect" style="border:0; background:transparent; outline:0">
+        <select id="roleSelect" disabled style="border:0; background:transparent; outline:0">
           <option value="viewer">viewer</option>
           <option value="editor">editor</option>
-          <option value="approver" selected>approver</option>
+          <option value="approver">approver</option>
           <option value="admin">admin</option>
         </select>
       </label>
@@ -111,9 +118,7 @@
       <div class="group-title">待验收文件</div>
       <div class="nav-item active" data-type="inbox"><span>待处理事项</span><span class="badge" id="inboxBadge">0</span></div>
       <div class="group-title">项目</div>
-      <div class="nav-item" data-type="project" data-project="项目 1">项目 1</div>
-      <div class="nav-item" data-type="project" data-project="项目 2">项目 2</div>
-      <div class="nav-item" data-type="project" data-project="项目 3">项目 3</div>
+      <div id="projectNav"></div>
       <div class="spacer"></div>
       <div class="nav-item template" data-type="template">模板库</div>
     </aside>
@@ -131,28 +136,7 @@
       <!-- A: Project board -->
       <section id="boardView" class="panel" aria-label="项目状态看板" hidden>
         <div class="crumbs"><span id="boardTitle">项目 1</span><span class="slash">/</span><span>地区状态</span></div>
-        <div class="h-scroll" id="regionScroller">
-          <article class="status-card" data-region="EU">
-            <h3>EU · MDR</h3>
-            <p class="meta"><span>Status: In progress</span> <span>#1</span></p>
-            <div class="bar"><span style="width:55%"></span></div>
-          </article>
-          <article class="status-card" data-region="China">
-            <h3>China · NMPA</h3>
-            <p class="meta"><span>Status: Todo</span> <span>#2</span></p>
-            <div class="bar"><span style="width:20%"></span></div>
-          </article>
-          <article class="status-card" data-region="FDA">
-            <h3>US · FDA</h3>
-            <p class="meta"><span>Status: Draft</span> <span>#3</span></p>
-            <div class="bar"><span style="width:35%"></span></div>
-          </article>
-          <article class="status-card" data-region="UK">
-            <h3>UK · MHRA</h3>
-            <p class="meta"><span>Status: Pending</span> <span>#4</span></p>
-            <div class="bar"><span style="width:10%"></span></div>
-          </article>
-        </div>
+        <div class="h-scroll" id="regionScroller"></div>
         <p style="color:var(--muted); margin:.3rem 0 0">提示：点击某个地区进入明细列表。</p>
       </section>
 
@@ -166,6 +150,10 @@
       <!-- C: Files -->
       <section id="fileView" class="panel" aria-label="文件列表" hidden>
         <div class="crumbs"><span id="fileProject">项目 1</span><span class="slash">/</span><span id="fileRegion">China · NMPA</span><span class="slash">/</span><span id="fileGroup">占位条目 1</span></div>
+        <div class="toolbar">
+          <button class="btn primary" id="uploadBtn">上传文档</button>
+          <span class="muted">双击下载当前版本；右键可借出、归还、看版本或追溯。</span>
+        </div>
         <div class="list file-list" id="fileList" role="list"></div>
         <div class="back"><button class="btn" data-back="detail">← 返回</button></div>
       </section>
@@ -176,11 +164,52 @@
         <div class="h-scroll" id="versionScroller"></div>
         <div class="back"><button class="btn" data-back="files">← 返回</button></div>
       </section>
+
+      <!-- E: Trace -->
+      <section id="traceView" class="panel" aria-label="文档追溯" hidden>
+        <div class="crumbs"><span id="traceProject">项目 1</span><span class="slash">/</span><span id="traceFile">文件</span><span class="slash">/</span><span>追溯</span></div>
+        <div id="traceSummary" class="muted" style="margin-bottom:.8rem"></div>
+        <h3>版本链</h3>
+        <div style="overflow:auto"><table class="trace-table" id="traceVersionTable"></table></div>
+        <h3>操作审计</h3>
+        <div class="list" id="traceAuditList"></div>
+        <div class="back"><button class="btn" data-back="files">← 返回</button></div>
+      </section>
     </main>
   </div>
 
   <!-- context menu modal -->
   <div class="modal" id="ctxModal"><div class="menu" id="ctxMenu" role="menu" aria-label="菜单"></div></div>
+
+  <div class="dialog" id="uploadDialog">
+    <div class="card">
+      <h3>上传文档</h3>
+      <form id="uploadForm" class="grid">
+        <label>文档名称<input name="name" placeholder="默认使用文件名"></label>
+        <label>文件<input name="file" type="file" required></label>
+        <label>说明<textarea name="comment" placeholder="首次上传说明（可选）"></textarea></label>
+        <div class="actions">
+          <button type="button" class="btn" id="cancelUpload">取消</button>
+          <button type="submit" class="btn primary">上传</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="dialog" id="checkinDialog">
+    <div class="card">
+      <h3>Check in / 归还</h3>
+      <form id="checkinForm" class="grid">
+        <input type="hidden" name="file_id">
+        <label>新版本文件<input name="file" type="file" required></label>
+        <label>变更说明<textarea name="comment" placeholder="本次修改了什么"></textarea></label>
+        <div class="actions">
+          <button type="button" class="btn" id="cancelCheckin">取消</button>
+          <button type="submit" class="btn primary">提交新版本</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <!-- acceptance / reject dialog -->
   <div class="dialog" id="formDialog">
@@ -206,6 +235,7 @@
 
 
 <script src="{{ url_for('static', filename='js/utils.js') }}"></script>
+<script src="{{ url_for('static', filename='js/api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/state.js') }}"></script>
 <script src="{{ url_for('static', filename='js/topbar.js') }}"></script>
 <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
