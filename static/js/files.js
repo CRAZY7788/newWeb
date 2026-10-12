@@ -1,11 +1,22 @@
 const fileList=$('#fileList'), fileGroup=$('#fileGroup');
 
-function openFiles(groupName){
-  fileGroup.textContent=groupName; fileList.innerHTML=''; STATE.group=groupName;
-  ['文件 A','文件 B','文件 C','文件 D'].forEach((name,idx)=>{
-    const row=document.createElement('div'); row.className='row'; row.dataset.file=name; row.dataset.checkedOut='false';
-    row.innerHTML = `<span class="idx">${idx+1}.</span><span>${name}</span><span class="tag state">草稿</span><span class="owner">owner ${idx+1}</span><span class="owner">${new Date().toLocaleDateString()}</span>`;
-    row.ondblclick = ()=> toast('打开：'+name);
+async function openFiles(groupId, groupName){
+  STATE.groupId = groupId;
+  STATE.group = groupName;
+  fileGroup.textContent = groupName;
+  const json = await api('/api/files?group_id='+groupId);
+  fileList.innerHTML = '';
+  json.files.forEach((f, idx)=>{
+    const checked = !!f.checked_out_by;
+    const row=document.createElement('div');
+    row.className='row';
+    row.dataset.file = f.name;
+    row.dataset.fileId = f.id;
+    row.dataset.checkedOut = checked ? 'true' : 'false';
+    const owner = f.checked_out_by_name || '—';
+    const ver = f.latest_version || '';
+    row.innerHTML = `<span class="idx">${idx+1}.</span><span>${f.name} ${ver}</span><span class="tag state">${f.status}</span><span class="owner">${owner}</span><span class="owner">${f.checked_out_at ? new Date(f.checked_out_at).toLocaleDateString() : ''}</span>`;
+    row.ondblclick = ()=> window.open('/versions/download?file_id='+f.id);
     row.addEventListener('contextmenu', (e)=> openFileMenu(e,row));
     addLongPress(row, (e)=> openFileMenu(e,row));
     fileList.appendChild(row);
@@ -15,16 +26,29 @@ function openFiles(groupName){
 
 function openFileMenu(e,row){
   e.preventDefault();
-  const items=[
-    {text: row.dataset.checkedOut==='true'?'Check in':'Check out', action:()=> toggleCheckout(row)},
-    {text:'历史版本', action:()=> openVersionsFromRow(row)}
-  ];
+  const items=[];
+  if(canEdit()){
+    items.push({
+      text: row.dataset.checkedOut==='true' ? 'Check in' : 'Check out',
+      action:()=> toggleCheckout(row)
+    });
+  }
+  items.push({text:'历史版本', action:()=> openVersionsFromRow(row)});
   openContextMenu(e, items);
 }
 
-function toggleCheckout(row){
-  const flag=row.dataset.checkedOut==='true';
-  row.dataset.checkedOut=(!flag).toString();
-  row.querySelector('.state').textContent = flag ? '草稿' : '已借出';
-  toast(flag?'已 Check in':'已 Check out');
+async function toggleCheckout(row){
+  const fid = Number(row.dataset.fileId);
+  const checked = row.dataset.checkedOut === 'true';
+  try{
+    await api(checked ? '/api/files/checkin' : '/api/files/checkout', {
+      method: 'POST',
+      body: JSON.stringify({file_id: fid})
+    });
+    toast(checked ? '已 Check in，进入待验收' : '已 Check out');
+    await openFiles(STATE.groupId, STATE.group);
+    loadAcceptance();
+  }catch(err){
+    toast(err.message);
+  }
 }

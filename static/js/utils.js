@@ -16,13 +16,13 @@ function addLongPress(el, cb){
   el.addEventListener('touchmove', ()=>clearTimeout(t), {passive:true});
 }
 
-// 视图控制
 const views = {
   inbox: $('#acceptanceView'),
   board: $('#boardView'),
   detail: $('#detailView'),
   files: $('#fileView'),
-  versions: $('#versionView')
+  versions: $('#versionView'),
+  trace: $('#traceView')
 };
 function show(id){
   Object.values(views).forEach(v=>v.hidden=true);

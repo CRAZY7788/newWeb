@@ -7,7 +7,16 @@ themeBtn.addEventListener('click', ()=>{
   localStorage.setItem('theme', root.classList.contains('dark') ? 'dark':'light');
 });
 
-// 获取用户名
-fetch('/api/me').then(r=>r.json()).then(j=>{
-  if(j.ok && j.user){ $('#who').textContent=j.user.username; }
-});
+async function loadMe(){
+  const j = await fetch('/api/me', {credentials:'same-origin'}).then(r=>r.json());
+  if(j.ok && j.user){
+    $('#who').textContent = j.user.username;
+    PERM.role = j.user.role || 'viewer';
+    const sel = $('#roleSelect');
+    sel.value = PERM.role;
+    sel.disabled = true;
+    sel.title = '角色由账号决定';
+  } else {
+    location.href = '/login';
+  }
+}

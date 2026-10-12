@@ -1,70 +1,45 @@
 
-import hashlib
 import os
-import uuid
+import hashlib
 import datetime as dt
 from functools import wraps
 
-from flask import (
-    Flask, render_template, request, redirect, url_for, session,
-    jsonify, send_from_directory, abort,
-)
+from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from sqlalchemy import inspect, text
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
 try:
     from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 except ImportError:
-    load_dotenv = None
+    pass
 
 # ---------------- Config ----------------
 BASE_DIR = os.path.dirname(__file__)
 TEMPLATE_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "new_web", "templates"))
 STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "static"))
-DEFAULT_UPLOAD_DIR = os.path.abspath(os.path.join(BASE_DIR, "uploads"))
+DEFAULT_VERSION_FILE = "versions/history.pdf"
+UPLOAD_ROOT = os.path.join(STATIC_DIR, "versions", "uploads")
 
-ALLOWED_EXTENSIONS = {
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-    ".txt", ".md", ".csv", ".png", ".jpg", ".jpeg", ".zip",
+REGION_LABELS = {
+    "China": "China · NMPA",
+    "EU": "EU · MDR",
+    "FDA": "US · FDA",
+    "UK": "UK · MHRA",
 }
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-EDIT_ROLES = {"editor", "approver", "admin"}
 
-db = SQLAlchemy()
-migrate = Migrate()
+app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR, static_url_path="/static")
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret")
+app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
+    "DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
+)
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 
-
-def create_app(test_config=None):
-    if load_dotenv:
-        load_dotenv(os.path.join(BASE_DIR, ".env"))
-
-    app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR, static_url_path="/static")
-    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret")
-    app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-        "DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
-    )
-    app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-    app.config["MAX_CONTENT_LENGTH"] = MAX_UPLOAD_BYTES
-    app.config["UPLOAD_DIR"] = DEFAULT_UPLOAD_DIR
-    if test_config:
-        app.config.update(test_config)
-
-    os.makedirs(app.config["UPLOAD_DIR"], exist_ok=True)
-    db.init_app(app)
-    migrate.init_app(app, db)
-
-    with app.app_context():
-        db.create_all()
-        ensure_columns()
-        if not app.config.get("TESTING"):
-            seed_if_needed()
-
-    register_routes(app)
-    return app
-
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
 
 # ---------------- Models ----------------
 class User(db.Model):
@@ -72,7 +47,7 @@ class User(db.Model):
     username = db.Column(db.String(64), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     pwd_hash = db.Column(db.String(255), nullable=False)
-    role = db.Column(db.String(20), default="approver")
+    role = db.Column(db.String(20), default="approver")  # viewer/editor/approver/admin
     created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
     def set_password(self, pw):
@@ -89,7 +64,7 @@ class Project(db.Model):
 
 class Region(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(80), nullable=False)
+    name = db.Column(db.String(80), nullable=False)  # China / EU / FDA / UK
     project_id = db.Column(db.Integer, db.ForeignKey("project.id"), nullable=False)
     project = db.relationship(Project, backref=db.backref("regions", lazy=True))
 
@@ -104,12 +79,12 @@ class Group(db.Model):
 class File(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
-    doc_code = db.Column(db.String(32), unique=True)
     group_id = db.Column(db.Integer, db.ForeignKey("group.id"), nullable=False)
     group = db.relationship(Group, backref=db.backref("files", lazy=True))
     status = db.Column(db.String(32), default="草稿")
     checked_out_by = db.Column(db.Integer, db.ForeignKey("user.id"))
     checked_out_at = db.Column(db.DateTime)
+    doc_code = db.Column(db.String(32))
     current_version_id = db.Column(db.Integer)
 
 
@@ -120,12 +95,12 @@ class FileVersion(db.Model):
     label = db.Column(db.String(32), nullable=False)
     date = db.Column(db.DateTime, default=dt.datetime.utcnow)
     author = db.Column(db.String(64))
-    rel_path = db.Column(db.String(255), default="")
+    rel_path = db.Column(db.String(255), default=DEFAULT_VERSION_FILE)
     original_filename = db.Column(db.String(255))
     size_bytes = db.Column(db.Integer, default=0)
     sha256 = db.Column(db.String(64))
     comment = db.Column(db.Text)
-    parent_version_id = db.Column(db.Integer, db.ForeignKey("file_version.id"))
+    parent_version_id = db.Column(db.Integer)
 
 
 class AcceptanceTask(db.Model):
@@ -146,60 +121,7 @@ class AuditLog(db.Model):
     created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
 
-def ensure_columns():
-    inspector = inspect(db.engine)
-    existing_tables = set(inspector.get_table_names())
-    wanted = {
-        "file": {
-            "doc_code": "VARCHAR(32)",
-            "current_version_id": "INTEGER",
-        },
-        "file_version": {
-            "original_filename": "VARCHAR(255)",
-            "size_bytes": "INTEGER DEFAULT 0",
-            "sha256": "VARCHAR(64)",
-            "comment": "TEXT",
-            "parent_version_id": "INTEGER",
-        },
-    }
-    for table, cols in wanted.items():
-        if table not in existing_tables:
-            continue
-        have = {c["name"] for c in inspector.get_columns(table)}
-        for name, spec in cols.items():
-            if name not in have:
-                db.session.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {spec}"))
-        db.session.commit()
-
-
-def seed_if_needed():
-    if not User.query.first():
-        admin = User(username="admin", email="admin@example.com", role="admin")
-        admin.set_password("admin123")
-        editor = User(username="editor", email="editor@example.com", role="editor")
-        editor.set_password("editor123")
-        viewer = User(username="viewer", email="viewer@example.com", role="viewer")
-        viewer.set_password("viewer123")
-        db.session.add_all([admin, editor, viewer])
-        db.session.commit()
-    if not Project.query.first():
-        p1 = Project(name="项目 1")
-        p2 = Project(name="项目 2")
-        db.session.add_all([p1, p2])
-        db.session.flush()
-        regions = []
-        for pname, project in (("China", p1), ("EU", p1), ("FDA", p1), ("UK", p1), ("China", p2)):
-            regions.append(Region(name=pname, project=project))
-        db.session.add_all(regions)
-        db.session.flush()
-        groups = []
-        for r in regions:
-            groups.append(Group(name="占位条目 1", region=r))
-            groups.append(Group(name="占位条目 2", region=r))
-        db.session.add_all(groups)
-        db.session.commit()
-
-
+# ---------------- Helpers ----------------
 def current_user():
     name = session.get("username")
     if not name:
@@ -207,12 +129,7 @@ def current_user():
     return User.query.filter_by(username=name).first()
 
 
-def require_login():
-    if "username" not in session:
-        abort(401)
-
-
-def require_login_json(fn):
+def login_required(fn):
     @wraps(fn)
     def wrapper(*args, **kwargs):
         if "username" not in session:
@@ -221,14 +138,62 @@ def require_login_json(fn):
     return wrapper
 
 
-def audit(user, action, target, detail=""):
-    db.session.add(AuditLog(user=user, action=action, target=target, detail=detail or ""))
+def role_required(*roles):
+    def deco(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            if "username" not in session:
+                return jsonify({"ok": False, "error": "未登录"}), 401
+            u = current_user()
+            if not u or u.role not in roles:
+                return jsonify({"ok": False, "error": "权限不足"}), 403
+            return fn(*args, **kwargs)
+        return wrapper
+    return deco
 
 
-def next_doc_code():
-    last = File.query.order_by(File.id.desc()).first()
-    n = (last.id + 1) if last else 1
-    return f"DOC-{n:04d}"
+def region_label(name):
+    return REGION_LABELS.get(name, name)
+
+
+def region_stats(region):
+    files = File.query.join(Group).filter(Group.region_id == region.id).all()
+    if not files:
+        return {"progress": 0, "status": "Todo", "file_count": 0}
+    accepted = sum(1 for f in files if f.status == "已验收")
+    progress = int(100 * accepted / len(files))
+    if accepted == len(files):
+        status = "Done"
+    elif any(f.status in ("已借出", "待验收", "已验收") for f in files):
+        status = "In progress"
+    else:
+        status = "Todo"
+    return {"progress": progress, "status": status, "file_count": len(files)}
+
+
+def file_owner_name(file_obj):
+    if not file_obj.checked_out_by:
+        return None
+    u = db.session.get(User, file_obj.checked_out_by)
+    return u.username if u else None
+
+
+def serialize_file(f):
+    latest = (
+        FileVersion.query.filter_by(file_id=f.id)
+        .order_by(FileVersion.date.desc())
+        .first()
+    )
+    return {
+        "id": f.id,
+        "name": f.name,
+        "status": f.status,
+        "group_id": f.group_id,
+        "checked_out_by": f.checked_out_by,
+        "checked_out_by_name": file_owner_name(f),
+        "checked_out_at": f.checked_out_at.isoformat() if f.checked_out_at else None,
+        "latest_version": latest.label if latest else None,
+    }
 
 
 def next_version_label(file_id):
@@ -236,410 +201,439 @@ def next_version_label(file_id):
     return f"V{count + 1}"
 
 
-def file_ext(filename):
-    return os.path.splitext(filename or "")[1].lower()
+def save_upload(storage, file_id):
+    os.makedirs(os.path.join(UPLOAD_ROOT, str(file_id)), exist_ok=True)
+    raw = storage.read()
+    sha = hashlib.sha256(raw).hexdigest()
+    fname = secure_filename(storage.filename or "upload.bin") or "upload.bin"
+    stored = f"{sha[:12]}_{fname}"
+    path = os.path.join(UPLOAD_ROOT, str(file_id), stored)
+    with open(path, "wb") as fh:
+        fh.write(raw)
+    rel = os.path.relpath(path, STATIC_DIR).replace("\\", "/")
+    return rel, fname, len(raw), sha
 
 
-def validate_upload(storage):
-    if not storage or not storage.filename:
-        return "请选择要上传的文件"
-    ext = file_ext(storage.filename)
-    if ext not in ALLOWED_EXTENSIONS:
-        return f"不支持的文件类型：{ext or '无扩展名'}"
-    return None
+def seed_if_needed():
+    if not User.query.filter_by(username="admin").first():
+        admin = User(username="admin", email="admin@example.com", role="admin")
+        admin.set_password("admin123")
+        db.session.add(admin)
+
+    extras = [
+        ("approver", "approver@example.com", "approver", "approver123"),
+        ("editor", "editor@example.com", "editor", "editor123"),
+        ("viewer", "viewer@example.com", "viewer", "viewer123"),
+    ]
+    for username, email, role, password in extras:
+        if not User.query.filter_by(username=username).first():
+            u = User(username=username, email=email, role=role)
+            u.set_password(password)
+            db.session.add(u)
+
+    project_specs = [
+        ("项目 1", ["China", "EU", "FDA", "UK"]),
+        ("项目 2", ["China", "EU"]),
+        ("项目 3", ["China", "FDA"]),
+    ]
+    for pname, region_names in project_specs:
+        p = Project.query.filter_by(name=pname).first()
+        if not p:
+            p = Project(name=pname)
+            db.session.add(p)
+            db.session.flush()
+        for rname in region_names:
+            r = Region.query.filter_by(name=rname, project_id=p.id).first()
+            if not r:
+                r = Region(name=rname, project=p)
+                db.session.add(r)
+                db.session.flush()
+            for gname in ("占位条目 1", "占位条目 2"):
+                if not Group.query.filter_by(name=gname, region_id=r.id).first():
+                    db.session.add(Group(name=gname, region=r))
+    db.session.flush()
+
+    if not File.query.first():
+        groups = Group.query.order_by(Group.id.asc()).all()
+        for idx, g in enumerate(groups):
+            created = []
+            for n, fname in enumerate(("文件 A", "文件 B"), start=1):
+                f = File(name=fname, group=g, status="草稿", doc_code=f"DOC-{g.id:02d}{n}")
+                db.session.add(f)
+                db.session.flush()
+                v1 = FileVersion(
+                    file=f,
+                    label="V1",
+                    author="admin",
+                    rel_path=DEFAULT_VERSION_FILE,
+                    original_filename="history.pdf",
+                    comment="初始版本",
+                )
+                db.session.add(v1)
+                db.session.flush()
+                f.current_version_id = v1.id
+                created.append(f)
+            if idx == 0:
+                fA = created[0]
+                v2 = FileVersion(
+                    file=fA,
+                    label="V2",
+                    author="editor",
+                    rel_path=DEFAULT_VERSION_FILE,
+                    original_filename="history.pdf",
+                    comment="提交验收",
+                    parent_version_id=fA.current_version_id,
+                )
+                db.session.add(v2)
+                db.session.flush()
+                fA.current_version_id = v2.id
+                fA.status = "待验收"
+                created[1].status = "待验收"
+                db.session.add(AcceptanceTask(file=fA, owner="editor", status="待验收"))
+                db.session.add(AcceptanceTask(file=created[1], owner="editor", status="待验收"))
+
+    db.session.commit()
 
 
-def save_version_bytes(upload_dir, file_id, label, original_name, data):
-    ext = file_ext(original_name) or ".bin"
-    safe = secure_filename(original_name) or f"document{ext}"
-    stored = f"{uuid.uuid4().hex}_{safe}"
-    rel = os.path.join("file", str(file_id), stored)
-    dest_dir = os.path.join(upload_dir, "file", str(file_id))
-    os.makedirs(dest_dir, exist_ok=True)
-    path = os.path.join(upload_dir, rel)
-    with open(path, "wb") as f:
-        f.write(data)
-    return rel.replace("\\", "/"), hashlib.sha256(data).hexdigest(), len(data)
+with app.app_context():
+    db.create_all()
+    seed_if_needed()
 
 
-def user_can_edit(user):
-    return bool(user) and user.role in EDIT_ROLES
+# ---------------- Auth pages ----------------
+@app.route("/")
+def home():
+    if "username" in session:
+        return redirect(url_for("main"))
+    return redirect(url_for("login"))
 
 
-def locker(file_row):
-    if not file_row.checked_out_by:
-        return None
-    return db.session.get(User, file_row.checked_out_by)
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        u = User.query.filter((User.username == username) | (User.email == username)).first()
+        if not u or not u.check_password(password):
+            return render_template("auth.html", error="用户名或密码错误")
+        session["username"] = u.username
+        session["role"] = u.role
+        return redirect(url_for("main"))
+    return render_template("auth.html")
 
 
-def serialize_file(f):
-    holder = locker(f)
-    current = db.session.get(FileVersion, f.current_version_id) if f.current_version_id else None
-    if not current:
-        current = (
-            FileVersion.query.filter_by(file_id=f.id)
-            .order_by(FileVersion.date.desc(), FileVersion.id.desc())
-            .first()
-        )
-    return {
-        "id": f.id,
-        "name": f.name,
-        "doc_code": f.doc_code,
-        "status": f.status,
-        "group_id": f.group_id,
-        "checked_out_by": f.checked_out_by,
-        "checked_out_by_name": holder.username if holder else None,
-        "checked_out_at": f.checked_out_at.isoformat() if f.checked_out_at else None,
-        "current_version": current.label if current else None,
-        "current_version_id": current.id if current else None,
-        "sha256": current.sha256 if current else None,
-    }
+@app.route("/logout")
+def logout():
+    session.clear()
+    return render_template("logout.html")
 
 
-def serialize_version(v):
-    return {
-        "id": v.id,
-        "file_id": v.file_id,
-        "label": v.label,
-        "date": v.date.strftime("%Y-%m-%d %H:%M") if v.date else None,
-        "author": v.author,
-        "rel_path": v.rel_path,
-        "original_filename": v.original_filename,
-        "size_bytes": v.size_bytes or 0,
-        "sha256": v.sha256,
-        "comment": v.comment or "",
-        "parent_version_id": v.parent_version_id,
-        "download_url": f"/versions/download?version_id={v.id}",
-    }
-
-
-def register_routes(app):
-    @app.route("/")
-    def home():
-        if "username" in session:
-            return redirect(url_for("main"))
+@app.route("/main")
+def main():
+    if "username" not in session:
         return redirect(url_for("login"))
+    return render_template("main.html", username=session["username"])
 
-    @app.route("/login", methods=["GET", "POST"])
-    def login():
-        if request.method == "POST":
-            username = request.form.get("username", "").strip()
-            password = request.form.get("password", "")
-            u = User.query.filter((User.username == username) | (User.email == username)).first()
-            if not u or not u.check_password(password):
-                return render_template("auth.html", error="用户名或密码错误")
-            session["username"] = u.username
-            session["role"] = u.role
-            return redirect(url_for("main"))
-        return render_template("auth.html")
 
-    @app.route("/logout")
-    def logout():
-        session.clear()
-        return render_template("logout.html")
+# ---------------- APIs ----------------
+@app.get("/api/me")
+def api_me():
+    if "username" not in session:
+        return jsonify({"ok": False, "user": None})
+    u = current_user()
+    role = u.role if u else session.get("role", "viewer")
+    return jsonify({"ok": True, "user": {"username": session["username"], "role": role}})
 
-    @app.route("/main")
-    def main():
-        if "username" not in session:
-            return redirect(url_for("login"))
-        return render_template("main.html", username=session["username"])
 
-    @app.get("/api/me")
-    def api_me():
-        if "username" not in session:
-            return jsonify({"ok": False, "user": None})
-        u = current_user()
-        if not u:
-            session.clear()
-            return jsonify({"ok": False, "user": None})
-        return jsonify({"ok": True, "user": {"id": u.id, "username": u.username, "role": u.role}})
+@app.get("/api/projects")
+@login_required
+def api_projects():
+    data = [{"id": p.id, "name": p.name} for p in Project.query.order_by(Project.id.asc()).all()]
+    return jsonify({"ok": True, "projects": data})
 
-    @app.get("/api/projects")
-    @require_login_json
-    def api_projects():
-        data = [{"id": p.id, "name": p.name} for p in Project.query.order_by(Project.id).all()]
-        return jsonify({"ok": True, "projects": data})
 
-    @app.get("/api/regions")
-    @require_login_json
-    def api_regions():
-        pid = request.args.get("project_id", type=int)
-        q = Region.query
-        if pid:
-            q = q.filter_by(project_id=pid)
-        return jsonify({
-            "ok": True,
-            "regions": [{"id": r.id, "name": r.name, "project_id": r.project_id} for r in q.all()],
+@app.get("/api/regions")
+@login_required
+def api_regions():
+    pid = request.args.get("project_id", type=int)
+    q = Region.query
+    if pid:
+        q = q.filter_by(project_id=pid)
+    regions = []
+    for r in q.order_by(Region.id.asc()).all():
+        stats = region_stats(r)
+        regions.append({
+            "id": r.id,
+            "name": r.name,
+            "label": region_label(r.name),
+            "project_id": r.project_id,
+            **stats,
         })
+    return jsonify({"ok": True, "regions": regions})
 
-    @app.get("/api/groups")
-    @require_login_json
-    def api_groups():
-        rid = request.args.get("region_id", type=int)
-        q = Group.query.filter_by(region_id=rid) if rid else Group.query
-        return jsonify({"ok": True, "groups": [{"id": g.id, "name": g.name, "region_id": g.region_id} for g in q.all()]})
 
-    @app.get("/api/files")
-    @require_login_json
-    def api_files():
-        gid = request.args.get("group_id", type=int)
-        q = File.query.filter_by(group_id=gid) if gid else File.query
-        return jsonify({"ok": True, "files": [serialize_file(f) for f in q.order_by(File.id).all()]})
+@app.get("/api/groups")
+@login_required
+def api_groups():
+    rid = request.args.get("region_id", type=int)
+    q = Group.query.filter_by(region_id=rid) if rid else Group.query
+    groups = []
+    for g in q.order_by(Group.id.asc()).all():
+        files = File.query.filter_by(group_id=g.id).all()
+        groups.append({
+            "id": g.id,
+            "name": g.name,
+            "region_id": g.region_id,
+            "file_count": len(files),
+            "accepted": sum(1 for f in files if f.status == "已验收"),
+        })
+    return jsonify({"ok": True, "groups": groups})
 
-    @app.post("/api/files/upload")
-    @require_login_json
-    def api_upload():
-        user = current_user()
-        if not user_can_edit(user):
-            return jsonify({"ok": False, "error": "当前角色不能上传文件"}), 403
-        group_id = request.form.get("group_id", type=int)
-        group = db.session.get(Group, group_id) if group_id else None
-        if not group:
-            return jsonify({"ok": False, "error": "缺少有效的分组"}), 400
+
+@app.get("/api/files")
+@login_required
+def api_files():
+    gid = request.args.get("group_id", type=int)
+    q = File.query.filter_by(group_id=gid) if gid else File.query
+    return jsonify({"ok": True, "files": [serialize_file(f) for f in q.order_by(File.id.asc()).all()]})
+
+
+@app.post("/api/files/checkout")
+@role_required("editor", "approver", "admin")
+def api_checkout():
+    data = request.get_json() or {}
+    fid = data.get("file_id")
+    user = current_user()
+    f = db.session.get(File, fid)
+    if not f:
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    if f.checked_out_by:
+        return jsonify({"ok": False, "error": "文件已被借出"}), 400
+    f.checked_out_by = user.id
+    f.checked_out_at = dt.datetime.utcnow()
+    f.status = "已借出"
+    db.session.add(AuditLog(user=user.username, action="checkout", target=f.name, detail=""))
+    db.session.commit()
+    return jsonify({"ok": True, "file": serialize_file(f)})
+
+
+@app.post("/api/files/upload")
+@role_required("editor", "approver", "admin")
+def api_upload():
+    gid = request.form.get("group_id", type=int)
+    storage = request.files.get("file")
+    if not gid:
+        return jsonify({"ok": False, "error": "缺少分组"}), 400
+    if not storage or not storage.filename:
+        return jsonify({"ok": False, "error": "请选择文件"}), 400
+    group = db.session.get(Group, gid)
+    if not group:
+        return jsonify({"ok": False, "error": "分组不存在"}), 404
+    user = current_user()
+    name = (request.form.get("name") or "").strip() or storage.filename
+    comment = request.form.get("comment") or "首次上传"
+    f = File(name=name, group=group, status="草稿")
+    db.session.add(f)
+    db.session.flush()
+    rel, fname, size, sha = save_upload(storage, f.id)
+    v = FileVersion(
+        file=f,
+        label="V1",
+        author=user.username,
+        rel_path=rel,
+        original_filename=fname,
+        size_bytes=size,
+        sha256=sha,
+        comment=comment,
+    )
+    db.session.add(v)
+    db.session.flush()
+    f.current_version_id = v.id
+    db.session.add(AuditLog(user=user.username, action="upload", target=f.name, detail=fname))
+    db.session.commit()
+    return jsonify({"ok": True, "file": serialize_file(f)})
+
+
+@app.post("/api/files/checkin")
+@role_required("editor", "approver", "admin")
+def api_checkin():
+    is_multipart = request.content_type and "multipart" in request.content_type
+    if is_multipart:
+        fid = request.form.get("file_id", type=int)
+        comment = request.form.get("comment") or "Check in"
+        label = request.form.get("label")
         storage = request.files.get("file")
-        err = validate_upload(storage)
-        if err:
-            return jsonify({"ok": False, "error": err}), 400
-        data = storage.read()
-        if not data:
-            return jsonify({"ok": False, "error": "文件内容为空"}), 400
-        if len(data) > MAX_UPLOAD_BYTES:
-            return jsonify({"ok": False, "error": "文件超过 50MB 限制"}), 400
-        name = (request.form.get("name") or "").strip() or os.path.splitext(storage.filename)[0]
-        comment = (request.form.get("comment") or "").strip()
-        row = File(name=name, group_id=group.id, status="草稿", doc_code=next_doc_code())
-        db.session.add(row)
-        db.session.flush()
-        label = "V1"
-        rel, digest, size = save_version_bytes(app.config["UPLOAD_DIR"], row.id, label, storage.filename, data)
-        ver = FileVersion(
-            file_id=row.id,
-            label=label,
-            author=user.username,
-            rel_path=rel,
-            original_filename=storage.filename,
-            size_bytes=size,
-            sha256=digest,
-            comment=comment or "首次上传",
-            parent_version_id=None,
-        )
-        db.session.add(ver)
-        db.session.flush()
-        row.current_version_id = ver.id
-        audit(user.username, "upload", row.doc_code, f"{row.name} {label} sha256={digest}")
-        db.session.commit()
-        return jsonify({"ok": True, "file": serialize_file(row), "version": serialize_version(ver)})
-
-    @app.post("/api/files/checkout")
-    @require_login_json
-    def api_checkout():
-        user = current_user()
-        if not user_can_edit(user):
-            return jsonify({"ok": False, "error": "当前角色不能借出文件"}), 403
+    else:
         data = request.get_json() or {}
-        f = db.session.get(File, data.get("file_id"))
-        if not f:
-            return jsonify({"ok": False, "error": "文件不存在"}), 404
-        if f.checked_out_by:
-            holder = locker(f)
-            who = holder.username if holder else str(f.checked_out_by)
-            if f.checked_out_by == user.id:
-                return jsonify({"ok": False, "error": "你已经借出了该文件"}), 409
-            return jsonify({"ok": False, "error": f"文件已被 {who} 借出"}), 409
-        f.checked_out_by = user.id
-        f.checked_out_at = dt.datetime.utcnow()
-        f.status = "已借出"
-        audit(user.username, "checkout", f.doc_code or f.name, "")
-        db.session.commit()
-        return jsonify({"ok": True, "file": serialize_file(f)})
+        fid = data.get("file_id")
+        comment = data.get("comment") or "Check in"
+        label = data.get("label")
+        storage = None
+    user = current_user()
+    f = db.session.get(File, fid)
+    if not f:
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    if f.checked_out_by and f.checked_out_by != user.id and user.role != "admin":
+        return jsonify({"ok": False, "error": "只能由借出人或管理员归还"}), 403
 
-    @app.post("/api/files/checkin")
-    @require_login_json
-    def api_checkin():
-        user = current_user()
-        if not user_can_edit(user):
-            return jsonify({"ok": False, "error": "当前角色不能归还文件"}), 403
-        file_id = request.form.get("file_id", type=int) or (request.get_json() or {}).get("file_id")
-        f = db.session.get(File, file_id)
-        if not f:
-            return jsonify({"ok": False, "error": "文件不存在"}), 404
-        if not f.checked_out_by:
-            return jsonify({"ok": False, "error": "文件未借出"}), 409
-        if f.checked_out_by != user.id and user.role != "admin":
-            holder = locker(f)
-            return jsonify({"ok": False, "error": f"只有借出人 {holder.username if holder else ''} 可以归还"}), 403
-        storage = request.files.get("file")
-        err = validate_upload(storage)
-        if err:
-            return jsonify({"ok": False, "error": err}), 400
-        data = storage.read()
-        if not data:
-            return jsonify({"ok": False, "error": "文件内容为空"}), 400
-        digest = hashlib.sha256(data).hexdigest()
-        current = db.session.get(FileVersion, f.current_version_id) if f.current_version_id else None
-        comment = (request.form.get("comment") or "").strip()
-        unchanged = bool(current and current.sha256 == digest)
-        if unchanged:
-            f.checked_out_by = None
-            f.checked_out_at = None
-            f.status = "草稿"
-            audit(user.username, "checkin", f.doc_code or f.name, "内容未变化，未创建新版本")
-            db.session.commit()
-            return jsonify({"ok": True, "unchanged": True, "file": serialize_file(f)})
+    parent_id = f.current_version_id
+    if storage and storage.filename:
+        rel, fname, size, sha = save_upload(storage, f.id)
+    else:
+        rel, fname, size, sha = DEFAULT_VERSION_FILE, "history.pdf", 0, None
+    v = FileVersion(
+        file=f,
+        label=label or next_version_label(f.id),
+        author=user.username,
+        rel_path=rel,
+        comment=comment,
+        parent_version_id=parent_id,
+        original_filename=fname,
+        size_bytes=size,
+        sha256=sha,
+    )
+    db.session.add(v)
+    db.session.flush()
+    f.current_version_id = v.id
+    f.checked_out_by = None
+    f.checked_out_at = None
+    f.status = "待验收"
+    existing = AcceptanceTask.query.filter_by(file_id=f.id, status="待验收").first()
+    if not existing:
+        db.session.add(AcceptanceTask(file=f, owner=user.username, status="待验收"))
+    db.session.add(AuditLog(user=user.username, action="checkin", target=f.name, detail=v.label))
+    db.session.commit()
+    return jsonify({"ok": True, "file": serialize_file(f)})
 
-        label = next_version_label(f.id)
-        rel, digest, size = save_version_bytes(app.config["UPLOAD_DIR"], f.id, label, storage.filename, data)
-        ver = FileVersion(
-            file_id=f.id,
-            label=label,
-            author=user.username,
-            rel_path=rel,
-            original_filename=storage.filename,
-            size_bytes=size,
-            sha256=digest,
-            comment=comment or f"由 {current.label if current else '无'} 签入",
-            parent_version_id=current.id if current else None,
-        )
-        db.session.add(ver)
-        db.session.flush()
-        f.current_version_id = ver.id
-        f.checked_out_by = None
-        f.checked_out_at = None
-        f.status = "草稿"
-        parent = current.label if current else "无"
-        audit(user.username, "checkin", f.doc_code or f.name, f"{parent} -> {label} sha256={digest}")
-        db.session.commit()
-        return jsonify({"ok": True, "unchanged": False, "file": serialize_file(f), "version": serialize_version(ver)})
 
-    @app.post("/api/files/unlock")
-    @require_login_json
-    def api_unlock():
-        user = current_user()
-        data = request.get_json() or {}
-        f = db.session.get(File, data.get("file_id"))
-        if not f:
-            return jsonify({"ok": False, "error": "文件不存在"}), 404
-        if not f.checked_out_by:
-            return jsonify({"ok": False, "error": "文件未借出"}), 409
-        if f.checked_out_by != user.id and user.role != "admin":
-            return jsonify({"ok": False, "error": "无权取消借出"}), 403
-        holder = locker(f)
-        f.checked_out_by = None
-        f.checked_out_at = None
-        f.status = "草稿"
-        audit(user.username, "unlock", f.doc_code or f.name, f"取消 {holder.username if holder else ''} 的借出，未生成新版本")
-        db.session.commit()
-        return jsonify({"ok": True, "file": serialize_file(f)})
-
-    @app.get("/api/files/versions")
-    @require_login_json
-    def api_versions():
-        fid = request.args.get("file_id", type=int)
-        if not fid:
-            return jsonify({"ok": False, "error": "缺少 file_id"}), 400
-        q = FileVersion.query.filter_by(file_id=fid).order_by(FileVersion.date.desc(), FileVersion.id.desc())
-        return jsonify({"ok": True, "versions": [serialize_version(v) for v in q.all()]})
-
-    @app.get("/api/files/<int:file_id>/trace")
-    @require_login_json
-    def api_trace(file_id):
-        f = db.session.get(File, file_id)
-        if not f:
-            return jsonify({"ok": False, "error": "文件不存在"}), 404
-        versions = (
-            FileVersion.query.filter_by(file_id=f.id)
-            .order_by(FileVersion.date.asc(), FileVersion.id.asc())
-            .all()
-        )
-        codes = [f.doc_code, f.name]
-        logs = (
-            AuditLog.query.filter(AuditLog.target.in_([c for c in codes if c]))
-            .order_by(AuditLog.created_at.asc(), AuditLog.id.asc())
-            .all()
-        )
-        chain = []
-        for v in versions:
-            parent = db.session.get(FileVersion, v.parent_version_id) if v.parent_version_id else None
-            chain.append({
-                **serialize_version(v),
-                "parent_label": parent.label if parent else None,
-            })
-        return jsonify({
-            "ok": True,
-            "file": serialize_file(f),
-            "versions": chain,
-            "audit": [{
+@app.get("/api/files/trace")
+@login_required
+def api_trace():
+    fid = request.args.get("file_id", type=int)
+    f = db.session.get(File, fid)
+    if not f:
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    versions = FileVersion.query.filter_by(file_id=fid).order_by(FileVersion.date.asc()).all()
+    logs = AuditLog.query.filter_by(target=f.name).order_by(AuditLog.created_at.desc()).all()
+    return jsonify({
+        "ok": True,
+        "file": serialize_file(f),
+        "versions": [
+            {
+                "id": v.id,
+                "label": v.label,
+                "date": v.date.strftime("%Y-%m-%d %H:%M") if v.date else "",
+                "author": v.author,
+                "comment": v.comment,
+                "sha256": v.sha256,
+                "original_filename": v.original_filename,
+            }
+            for v in versions
+        ],
+        "audit": [
+            {
                 "id": a.id,
                 "user": a.user,
                 "action": a.action,
-                "target": a.target,
                 "detail": a.detail,
-                "created_at": a.created_at.strftime("%Y-%m-%d %H:%M:%S") if a.created_at else None,
-            } for a in logs],
+                "created_at": a.created_at.strftime("%Y-%m-%d %H:%M") if a.created_at else "",
+            }
+            for a in logs
+        ],
+    })
+
+
+@app.get("/api/files/versions")
+@login_required
+def api_versions():
+    fid = request.args.get("file_id", type=int)
+    q = FileVersion.query.filter_by(file_id=fid).order_by(FileVersion.date.desc())
+    return jsonify({"ok": True, "versions": [
+        {
+            "id": v.id,
+            "label": v.label,
+            "date": v.date.strftime("%Y-%m-%d") if v.date else "",
+            "author": v.author,
+            "rel_path": v.rel_path,
+            "comment": v.comment,
+        }
+        for v in q.all()
+    ]})
+
+
+@app.get("/versions/download")
+def versions_download():
+    if "username" not in session:
+        return redirect(url_for("login"))
+    vid = request.args.get("version_id", type=int)
+    fid = request.args.get("file_id", type=int)
+    v = None
+    if vid:
+        v = db.session.get(FileVersion, vid)
+    elif fid:
+        v = FileVersion.query.filter_by(file_id=fid).order_by(FileVersion.date.desc()).first()
+    rel = v.rel_path if v and v.rel_path else DEFAULT_VERSION_FILE
+    path = os.path.join(STATIC_DIR, rel)
+    if not os.path.exists(path):
+        path = os.path.join(STATIC_DIR, DEFAULT_VERSION_FILE)
+    directory, filename = os.path.split(path)
+    if not os.path.exists(path):
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    return send_from_directory(directory, filename, as_attachment=False)
+
+
+@app.get("/api/acceptance")
+@login_required
+def api_acceptance_list():
+    tasks = AcceptanceTask.query.filter_by(status="待验收").order_by(AcceptanceTask.created_at.desc()).all()
+    out = []
+    for t in tasks:
+        out.append({
+            "id": t.id,
+            "file_id": t.file_id,
+            "name": t.file.name,
+            "owner": t.owner,
+            "date": t.created_at.strftime("%Y-%m-%d %H:%M") if t.created_at else "",
+            "status": t.status,
         })
-
-    @app.get("/versions/download")
-    def versions_download():
-        require_login()
-        vid = request.args.get("version_id", type=int)
-        v = db.session.get(FileVersion, vid) if vid else None
-        if not v or not v.rel_path:
-            abort(404)
-        path = os.path.join(app.config["UPLOAD_DIR"], v.rel_path)
-        if not os.path.isfile(path):
-            abort(404)
-        directory, filename = os.path.split(path)
-        user = current_user()
-        audit(user.username if user else "?", "download", v.file.doc_code if v.file else str(v.file_id), v.label)
-        db.session.commit()
-        download_name = v.original_filename or filename
-        return send_from_directory(directory, filename, as_attachment=True, download_name=download_name)
-
-    @app.get("/api/acceptance")
-    @require_login_json
-    def api_acceptance_list():
-        tasks = AcceptanceTask.query.filter_by(status="待验收").all()
-        out = []
-        for t in tasks:
-            out.append({
-                "id": t.id,
-                "file_id": t.file_id,
-                "name": t.file.name,
-                "owner": t.owner,
-                "date": t.created_at.strftime("%Y-%m-%d %H:%M"),
-            })
-        return jsonify({"ok": True, "items": out})
-
-    @app.post("/api/acceptance/approve")
-    @require_login_json
-    def api_accept_approve():
-        data = request.get_json() or {}
-        user = session["username"]
-        t = db.session.get(AcceptanceTask, data.get("task_id"))
-        if not t:
-            abort(404)
-        t.status = "已验收"
-        t.file.status = "已验收"
-        audit(user, "accept", t.file.doc_code or t.file.name, f"task={t.id}")
-        db.session.commit()
-        return jsonify({"ok": True})
-
-    @app.post("/api/acceptance/reject")
-    @require_login_json
-    def api_accept_reject():
-        data = request.get_json() or {}
-        user = session["username"]
-        t = db.session.get(AcceptanceTask, data.get("task_id"))
-        if not t:
-            abort(404)
-        t.status = "已拒绝"
-        t.file.status = "已拒绝"
-        audit(user, "reject", t.file.doc_code or t.file.name, data.get("reason", ""))
-        db.session.commit()
-        return jsonify({"ok": True})
+    return jsonify({"ok": True, "items": out})
 
 
-app = create_app()
+@app.post("/api/acceptance/approve")
+@role_required("approver", "admin")
+def api_accept_approve():
+    data = request.get_json() or {}
+    tid = data.get("task_id")
+    user = current_user()
+    t = db.session.get(AcceptanceTask, tid)
+    if not t:
+        return jsonify({"ok": False, "error": "任务不存在"}), 404
+    t.status = "已验收"
+    t.file.status = "已验收"
+    detail = data.get("role") or data.get("comment") or f"task={tid}"
+    db.session.add(AuditLog(user=user.username, action="accept", target=t.file.name, detail=detail))
+    db.session.commit()
+    return jsonify({"ok": True})
 
+
+@app.post("/api/acceptance/reject")
+@role_required("approver", "admin")
+def api_accept_reject():
+    data = request.get_json() or {}
+    tid = data.get("task_id")
+    reason = data.get("reason", "")
+    user = current_user()
+    t = db.session.get(AcceptanceTask, tid)
+    if not t:
+        return jsonify({"ok": False, "error": "任务不存在"}), 404
+    t.status = "已拒绝"
+    t.file.status = "已拒绝"
+    db.session.add(AuditLog(user=user.username, action="reject", target=t.file.name, detail=reason))
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+# -------------- run --------------
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="127.0.0.1", port=port, debug=True)
