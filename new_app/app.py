@@ -7,6 +7,7 @@ from functools import wraps
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
+from sqlalchemy import inspect, text, or_, and_
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -22,6 +23,21 @@ TEMPLATE_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "new_web", "template
 STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "static"))
 DEFAULT_VERSION_FILE = "versions/history.pdf"
 UPLOAD_ROOT = os.path.join(STATIC_DIR, "versions", "uploads")
+FOLDER_MAX_DEPTH = 3
+
+ALLOWED_FILE_TYPES = ("word", "excel", "txt", "zip", "other")
+EXT_TO_FILE_TYPE = {
+    ".docx": "word",
+    ".xlsx": "excel",
+    ".txt": "txt",
+    ".zip": "zip",
+}
+EXT_TO_MIME = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".txt": "text/plain",
+    ".zip": "application/zip",
+}
 
 REGION_LABELS = {
     "China": "China · NMPA",
@@ -73,17 +89,34 @@ class Region(db.Model):
 
 
 class Group(db.Model):
+    """Legacy placeholder groups; migrated to Folder. Kept for old DB rows."""
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
     region_id = db.Column(db.Integer, db.ForeignKey("region.id"), nullable=False)
     region = db.relationship(Region, backref=db.backref("groups", lazy=True))
 
 
+class Folder(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey("folder.id"), nullable=True)
+    region_id = db.Column(db.Integer, db.ForeignKey("region.id"), nullable=False)
+    created_by = db.Column(db.String(64))
+    created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
+    region = db.relationship(Region, backref=db.backref("folders", lazy=True))
+    parent = db.relationship("Folder", remote_side=[id], backref=db.backref("children", lazy=True))
+
+
 class File(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), nullable=False)
-    group_id = db.Column(db.Integer, db.ForeignKey("group.id"), nullable=False)
-    group = db.relationship(Group, backref=db.backref("files", lazy=True))
+    title = db.Column(db.String(200))
+    file_type = db.Column(db.String(20), default="other")
+    mime = db.Column(db.String(128))
+    folder_id = db.Column(db.Integer, db.ForeignKey("folder.id"), nullable=True)
+    folder = db.relationship(Folder, backref=db.backref("files", lazy=True))
+    group_id = db.Column(db.Integer, db.ForeignKey("group.id"), nullable=True)
+    group = db.relationship(Group, backref=db.backref("files_legacy", lazy=True))
     status = db.Column(db.String(32), default="草稿")
     checked_out_by = db.Column(db.Integer, db.ForeignKey("user.id"))
     checked_out_at = db.Column(db.DateTime)
@@ -120,6 +153,8 @@ class AuditLog(db.Model):
     user = db.Column(db.String(64))
     action = db.Column(db.String(64))
     target = db.Column(db.String(128))
+    target_type = db.Column(db.String(32))  # folder | file
+    target_id = db.Column(db.Integer)
     detail = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=dt.datetime.utcnow)
 
@@ -159,8 +194,87 @@ def region_label(name):
     return REGION_LABELS.get(name, name)
 
 
+def infer_file_type(filename):
+    if not filename:
+        return "other", None
+    ext = os.path.splitext(filename.lower())[1]
+    ftype = EXT_TO_FILE_TYPE.get(ext, "other")
+    mime = EXT_TO_MIME.get(ext)
+    return ftype, mime
+
+
+def log_audit(user, action, target_type, target_id, target_name, detail=""):
+    db.session.add(AuditLog(
+        user=user,
+        action=action,
+        target=target_name,
+        target_type=target_type,
+        target_id=target_id,
+        detail=detail,
+    ))
+
+
+def _table_columns(table_name):
+    rows = db.session.execute(text(f"PRAGMA table_info({table_name})")).fetchall()
+    return {row[1] for row in rows}
+
+
+def ensure_schema():
+    db.create_all()
+    file_cols = _table_columns("file")
+    al_cols = _table_columns("audit_log")
+    alters = []
+    if "folder_id" not in file_cols:
+        alters.append("ALTER TABLE file ADD COLUMN folder_id INTEGER REFERENCES folder(id)")
+    if "title" not in file_cols:
+        alters.append("ALTER TABLE file ADD COLUMN title VARCHAR(200)")
+    if "file_type" not in file_cols:
+        alters.append("ALTER TABLE file ADD COLUMN file_type VARCHAR(20)")
+    if "mime" not in file_cols:
+        alters.append("ALTER TABLE file ADD COLUMN mime VARCHAR(128)")
+    if "target_type" not in al_cols:
+        alters.append("ALTER TABLE audit_log ADD COLUMN target_type VARCHAR(32)")
+    if "target_id" not in al_cols:
+        alters.append("ALTER TABLE audit_log ADD COLUMN target_id INTEGER")
+    for stmt in alters:
+        db.session.execute(text(stmt))
+    if alters:
+        db.session.commit()
+
+
+def migrate_groups_to_folders():
+    """One-time: each legacy Group becomes a root Folder; files get folder_id."""
+    insp = inspect(db.engine)
+    if not insp.has_table("file") or not insp.has_table("folder"):
+        return
+    if File.query.filter(File.folder_id.is_(None)).count() == 0:
+        return
+    group_map = {}
+    for g in Group.query.order_by(Group.id.asc()).all():
+        folder = Folder.query.filter_by(
+            name=g.name, region_id=g.region_id, parent_id=None
+        ).first()
+        if not folder:
+            folder = Folder(name=g.name, region_id=g.region_id, parent_id=None, created_by="system")
+            db.session.add(folder)
+            db.session.flush()
+        group_map[g.id] = folder.id
+    for f in File.query.filter(File.folder_id.is_(None)).all():
+        if f.group_id and f.group_id in group_map:
+            f.folder_id = group_map[f.group_id]
+        if not f.title:
+            f.title = f.name
+        if not f.file_type or f.file_type == "other":
+            ver = FileVersion.query.filter_by(file_id=f.id).order_by(FileVersion.date.desc()).first()
+            fname = ver.original_filename if ver and ver.original_filename else f.name
+            ftype, mime = infer_file_type(fname)
+            f.file_type = ftype
+            f.mime = mime
+    db.session.commit()
+
+
 def region_stats(region):
-    files = File.query.join(Group).filter(Group.region_id == region.id).all()
+    files = File.query.join(Folder).filter(Folder.region_id == region.id).all()
     if not files:
         return {"progress": 0, "status": "Todo", "file_count": 0}
     accepted = sum(1 for f in files if f.status == "已验收")
@@ -190,12 +304,17 @@ def serialize_file(f):
     return {
         "id": f.id,
         "name": f.name,
+        "title": f.title or f.name,
+        "file_type": f.file_type or "other",
+        "mime": f.mime,
         "status": f.status,
-        "group_id": f.group_id,
+        "folder_id": f.folder_id,
+        "group_id": f.folder_id,
         "checked_out_by": f.checked_out_by,
         "checked_out_by_name": file_owner_name(f),
         "checked_out_at": f.checked_out_at.isoformat() if f.checked_out_at else None,
         "latest_version": latest.label if latest else None,
+        "doc_code": f.doc_code,
     }
 
 
@@ -215,6 +334,22 @@ def save_upload(storage, file_id):
         fh.write(raw)
     rel = os.path.relpath(path, STATIC_DIR).replace("\\", "/")
     return rel, fname, len(raw), sha
+
+
+def serialize_folder(folder):
+    files = File.query.filter_by(folder_id=folder.id).all()
+    child_count = Folder.query.filter_by(parent_id=folder.id).count()
+    return {
+        "id": folder.id,
+        "name": folder.name,
+        "parent_id": folder.parent_id,
+        "region_id": folder.region_id,
+        "file_count": len(files),
+        "child_count": child_count,
+        "accepted": sum(1 for f in files if f.status == "已验收"),
+        "created_at": folder.created_at.isoformat() if folder.created_at else None,
+        "created_by": folder.created_by,
+    }
 
 
 def seed_if_needed():
@@ -251,17 +386,28 @@ def seed_if_needed():
                 r = Region(name=rname, project=p)
                 db.session.add(r)
                 db.session.flush()
-            for gname in ("占位条目 1", "占位条目 2"):
-                if not Group.query.filter_by(name=gname, region_id=r.id).first():
-                    db.session.add(Group(name=gname, region=r))
+            for fname in ("设计文档", "质量记录"):
+                if not Folder.query.filter_by(name=fname, region_id=r.id, parent_id=None).first():
+                    db.session.add(Folder(
+                        name=fname, region_id=r.id, parent_id=None, created_by="admin"
+                    ))
     db.session.flush()
 
     if not File.query.first():
-        groups = Group.query.order_by(Group.id.asc()).all()
-        for idx, g in enumerate(groups):
+        folders = Folder.query.order_by(Folder.id.asc()).all()
+        for idx, folder in enumerate(folders):
             created = []
-            for n, fname in enumerate(("文件 A", "文件 B"), start=1):
-                f = File(name=fname, group=g, status="草稿", doc_code=f"DOC-{g.id:02d}{n}")
+            for n, doc_name in enumerate(("文件 A", "文件 B"), start=1):
+                ftype, mime = infer_file_type("history.pdf")
+                f = File(
+                    name=doc_name,
+                    title=doc_name,
+                    file_type=ftype,
+                    mime=mime,
+                    folder=folder,
+                    status="草稿",
+                    doc_code=f"DOC-{folder.id:02d}{n}",
+                )
                 db.session.add(f)
                 db.session.flush()
                 v1 = FileVersion(
@@ -299,7 +445,8 @@ def seed_if_needed():
 
 
 with app.app_context():
-    db.create_all()
+    ensure_schema()
+    migrate_groups_to_folders()
     seed_if_needed()
 
 
@@ -378,26 +525,51 @@ def api_regions():
 @app.get("/api/groups")
 @login_required
 def api_groups():
+    """Deprecated: use /api/folders. Returns root-level folders as legacy «groups»."""
     rid = request.args.get("region_id", type=int)
-    q = Group.query.filter_by(region_id=rid) if rid else Group.query
+    q = Folder.query.filter(Folder.parent_id.is_(None))
+    if rid:
+        q = q.filter_by(region_id=rid)
     groups = []
-    for g in q.order_by(Group.id.asc()).all():
-        files = File.query.filter_by(group_id=g.id).all()
+    for folder in q.order_by(Folder.id.asc()).all():
+        s = serialize_folder(folder)
         groups.append({
-            "id": g.id,
-            "name": g.name,
-            "region_id": g.region_id,
-            "file_count": len(files),
-            "accepted": sum(1 for f in files if f.status == "已验收"),
+            "id": s["id"],
+            "name": s["name"],
+            "region_id": s["region_id"],
+            "file_count": s["file_count"],
+            "accepted": s["accepted"],
         })
-    return jsonify({"ok": True, "groups": groups})
+    return jsonify({"ok": True, "groups": groups, "deprecated": "use /api/folders"})
+
+
+@app.get("/api/folders")
+@login_required
+def api_folders():
+    rid = request.args.get("region_id", type=int)
+    parent_raw = request.args.get("parent_id")
+    q = Folder.query
+    if rid:
+        q = q.filter_by(region_id=rid)
+    if parent_raw is None:
+        q = q.filter(Folder.parent_id.is_(None))
+    elif parent_raw in ("", "null", "none"):
+        q = q.filter(Folder.parent_id.is_(None))
+    else:
+        q = q.filter_by(parent_id=int(parent_raw))
+    folders = [serialize_folder(f) for f in q.order_by(Folder.id.asc()).all()]
+    return jsonify({"ok": True, "folders": folders})
 
 
 @app.get("/api/files")
 @login_required
 def api_files():
+    folder_id = request.args.get("folder_id", type=int)
     gid = request.args.get("group_id", type=int)
-    q = File.query.filter_by(group_id=gid) if gid else File.query
+    fid = folder_id or gid
+    q = File.query
+    if fid:
+        q = q.filter_by(folder_id=fid)
     return jsonify({"ok": True, "files": [serialize_file(f) for f in q.order_by(File.id.asc()).all()]})
 
 
@@ -415,7 +587,7 @@ def api_checkout():
     f.checked_out_by = user.id
     f.checked_out_at = dt.datetime.utcnow()
     f.status = "已借出"
-    db.session.add(AuditLog(user=user.username, action="checkout", target=f.name, detail=""))
+    log_audit(user.username, "checkout", "file", f.id, f.name, "")
     db.session.commit()
     return jsonify({"ok": True, "file": serialize_file(f)})
 
@@ -423,19 +595,27 @@ def api_checkout():
 @app.post("/api/files/upload")
 @role_required("editor", "approver", "admin")
 def api_upload():
-    gid = request.form.get("group_id", type=int)
+    gid = request.form.get("folder_id", type=int) or request.form.get("group_id", type=int)
     storage = request.files.get("file")
     if not gid:
-        return jsonify({"ok": False, "error": "缺少分组"}), 400
+        return jsonify({"ok": False, "error": "缺少文件夹"}), 400
     if not storage or not storage.filename:
         return jsonify({"ok": False, "error": "请选择文件"}), 400
-    group = db.session.get(Group, gid)
-    if not group:
-        return jsonify({"ok": False, "error": "分组不存在"}), 404
+    folder = db.session.get(Folder, gid)
+    if not folder:
+        return jsonify({"ok": False, "error": "文件夹不存在"}), 404
     user = current_user()
     name = (request.form.get("name") or "").strip() or storage.filename
     comment = request.form.get("comment") or "首次上传"
-    f = File(name=name, group=group, status="草稿")
+    ftype, mime = infer_file_type(storage.filename)
+    f = File(
+        name=name,
+        title=name,
+        file_type=ftype,
+        mime=mime,
+        folder=folder,
+        status="草稿",
+    )
     db.session.add(f)
     db.session.flush()
     rel, fname, size, sha = save_upload(storage, f.id)
@@ -452,7 +632,7 @@ def api_upload():
     db.session.add(v)
     db.session.flush()
     f.current_version_id = v.id
-    db.session.add(AuditLog(user=user.username, action="upload", target=f.name, detail=fname))
+    log_audit(user.username, "upload", "file", f.id, f.name, fname)
     db.session.commit()
     return jsonify({"ok": True, "file": serialize_file(f)})
 
@@ -504,7 +684,7 @@ def api_checkin():
     existing = AcceptanceTask.query.filter_by(file_id=f.id, status="待验收").first()
     if not existing:
         db.session.add(AcceptanceTask(file=f, owner=user.username, status="待验收"))
-    db.session.add(AuditLog(user=user.username, action="checkin", target=f.name, detail=v.label))
+    log_audit(user.username, "checkin", "file", f.id, f.name, v.label)
     db.session.commit()
     return jsonify({"ok": True, "file": serialize_file(f)})
 
@@ -517,7 +697,16 @@ def api_trace():
     if not f:
         return jsonify({"ok": False, "error": "文件不存在"}), 404
     versions = FileVersion.query.filter_by(file_id=fid).order_by(FileVersion.date.asc()).all()
-    logs = AuditLog.query.filter_by(target=f.name).order_by(AuditLog.created_at.desc()).all()
+    logs = (
+        AuditLog.query.filter(
+            or_(
+                and_(AuditLog.target_type == "file", AuditLog.target_id == fid),
+                and_(AuditLog.target_type.is_(None), AuditLog.target == f.name),
+            )
+        )
+        .order_by(AuditLog.created_at.desc())
+        .all()
+    )
     return jsonify({
         "ok": True,
         "file": serialize_file(f),
@@ -614,7 +803,7 @@ def api_accept_approve():
     t.status = "已验收"
     t.file.status = "已验收"
     detail = data.get("role") or data.get("comment") or f"task={tid}"
-    db.session.add(AuditLog(user=user.username, action="accept", target=t.file.name, detail=detail))
+    log_audit(user.username, "accept", "file", t.file_id, t.file.name, detail)
     db.session.commit()
     return jsonify({"ok": True})
 
@@ -631,7 +820,7 @@ def api_accept_reject():
         return jsonify({"ok": False, "error": "任务不存在"}), 404
     t.status = "已拒绝"
     t.file.status = "已拒绝"
-    db.session.add(AuditLog(user=user.username, action="reject", target=t.file.name, detail=reason))
+    log_audit(user.username, "reject", "file", t.file_id, t.file.name, reason)
     db.session.commit()
     return jsonify({"ok": True})
 
