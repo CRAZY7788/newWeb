@@ -87,6 +87,7 @@ function openUploadDialog(folderId){
   if(!canEdit()){ toast('当前角色不能上传'); return; }
   STATE.groupId = fid;
   uploadForm.reset();
+  uploadForm.dataset.folderId = String(fid);
   uploadDialog.classList.add('open');
 }
 
@@ -198,6 +199,7 @@ function openCreateDialog(folderId){
   if(!canEdit()){ toast('当前角色不能新建'); return; }
   STATE.groupId = fid;
   createForm.reset();
+  createForm.dataset.folderId = String(fid);
   updateCreateCommentVisibility();
   createDialog.classList.add('open');
 }
@@ -208,10 +210,17 @@ createForm?.querySelector('[name=type]')?.addEventListener('change', updateCreat
 $('#cancelCreate')?.addEventListener('click', () => createDialog.classList.remove('open'));
 createDialog?.addEventListener('click', (e) => { if(e.target === createDialog) createDialog.classList.remove('open'); });
 
+function folderIdFromDialogForm(form){
+  const raw = form?.dataset?.folderId;
+  const id = raw ? Number(raw) : NaN;
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
 createForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(createForm);
-  const folderId = getActiveFolderId();
+  const folderId = folderIdFromDialogForm(createForm);
+  if(!folderId){ toast('请重新打开「新建文档」并选择文件夹'); return; }
   const body = {
     folder_id: folderId,
     type: fd.get('type'),
@@ -237,7 +246,8 @@ uploadDialog?.addEventListener('click', (e) => { if(e.target === uploadDialog) u
 uploadForm?.addEventListener('submit', async (e) => {
   e.preventDefault();
   const fd = new FormData(uploadForm);
-  const folderId = getActiveFolderId();
+  const folderId = folderIdFromDialogForm(uploadForm);
+  if(!folderId){ toast('请重新打开「上传文档」并选择文件夹'); return; }
   fd.set('folder_id', folderId);
   try{
     await apiForm('/api/files/upload', fd);

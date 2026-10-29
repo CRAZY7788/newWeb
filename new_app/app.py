@@ -227,6 +227,13 @@ def validate_upload_filename(filename):
     return True, None
 
 
+def folder_file_name_taken(folder_id, name, exclude_file_id=None):
+    q = File.query.filter_by(folder_id=folder_id, name=name)
+    if exclude_file_id is not None:
+        q = q.filter(File.id != exclude_file_id)
+    return q.first() is not None
+
+
 def log_audit(user, action, target_type, target_id, target_name, detail=""):
     db.session.add(AuditLog(
         user=user,
@@ -451,6 +458,8 @@ def normalize_create_filename(name, kind):
     elif cur_ext.lower() != ext:
         raw = base + ext
     display = raw
+    if len(display) > 120:
+        return None, "文档名称过长（最多 120 个字符）"
     stored_name = secure_filename(raw) or f"doc{ext}"
     return display, stored_name
 
@@ -873,6 +882,10 @@ def api_upload():
         return jsonify({"ok": False, "error": "文件夹不存在"}), 404
     user = current_user()
     name = (request.form.get("name") or "").strip() or storage.filename
+    if len(name) > 120:
+        return jsonify({"ok": False, "error": "文档名称过长（最多 120 个字符）"}), 400
+    if folder_file_name_taken(folder.id, name):
+        return jsonify({"ok": False, "error": "当前文件夹下已有同名文档"}), 400
     comment = request.form.get("comment") or "首次上传"
     ftype, mime = infer_file_type(storage.filename)
     f = File(
@@ -923,6 +936,8 @@ def api_files_create():
     display_name, stored_fname = normalize_create_filename(name, kind)
     if display_name is None:
         return jsonify({"ok": False, "error": stored_fname}), 400
+    if folder_file_name_taken(folder.id, display_name):
+        return jsonify({"ok": False, "error": "当前文件夹下已有同名文档"}), 400
     user = current_user()
     ftype, mime = infer_file_type(stored_fname)
     f = File(
