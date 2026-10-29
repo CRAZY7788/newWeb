@@ -38,6 +38,14 @@ EXT_TO_MIME = {
     ".txt": "text/plain",
     ".zip": "application/zip",
 }
+ALLOWED_UPLOAD_EXTENSIONS = frozenset(EXT_TO_FILE_TYPE.keys())
+FILE_TYPE_LABELS = {
+    "word": "Word",
+    "excel": "Excel",
+    "txt": "文本",
+    "zip": "Zip",
+    "other": "其他",
+}
 
 REGION_LABELS = {
     "China": "China · NMPA",
@@ -201,6 +209,13 @@ def infer_file_type(filename):
     ftype = EXT_TO_FILE_TYPE.get(ext, "other")
     mime = EXT_TO_MIME.get(ext)
     return ftype, mime
+
+
+def validate_upload_filename(filename):
+    ext = os.path.splitext((filename or "").lower())[1]
+    if ext not in ALLOWED_UPLOAD_EXTENSIONS:
+        return False, "仅支持 Word（.docx）、Excel（.xlsx）、文本（.txt）、压缩包（.zip）"
+    return True, None
 
 
 def log_audit(user, action, target_type, target_id, target_name, detail=""):
@@ -696,6 +711,9 @@ def api_files():
     fid = folder_id or gid
     q = File.query
     if fid:
+        folder = db.session.get(Folder, fid)
+        if not folder:
+            return jsonify({"ok": False, "error": "文件夹不存在"}), 404
         q = q.filter_by(folder_id=fid)
     return jsonify({"ok": True, "files": [serialize_file(f) for f in q.order_by(File.id.asc()).all()]})
 
@@ -728,6 +746,9 @@ def api_upload():
         return jsonify({"ok": False, "error": "缺少文件夹"}), 400
     if not storage or not storage.filename:
         return jsonify({"ok": False, "error": "请选择文件"}), 400
+    ok, err = validate_upload_filename(storage.filename)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
     folder = db.session.get(Folder, gid)
     if not folder:
         return jsonify({"ok": False, "error": "文件夹不存在"}), 404
@@ -741,6 +762,7 @@ def api_upload():
         file_type=ftype,
         mime=mime,
         folder=folder,
+        group_id=folder.id,
         status="草稿",
     )
     db.session.add(f)
@@ -773,6 +795,8 @@ def api_checkin():
         comment = request.form.get("comment") or "Check in"
         label = request.form.get("label")
         storage = request.files.get("file")
+        if not storage or not storage.filename:
+            return jsonify({"ok": False, "error": "请上传新版本文件"}), 400
     else:
         data = request.get_json() or {}
         fid = data.get("file_id")
@@ -788,7 +812,13 @@ def api_checkin():
 
     parent_id = f.current_version_id
     if storage and storage.filename:
+        ok, err = validate_upload_filename(storage.filename)
+        if not ok:
+            return jsonify({"ok": False, "error": err}), 400
         rel, fname, size, sha = save_upload(storage, f.id)
+        ftype, mime = infer_file_type(fname)
+        f.file_type = ftype
+        f.mime = mime
     else:
         rel, fname, size, sha = DEFAULT_VERSION_FILE, "history.pdf", 0, None
     v = FileVersion(

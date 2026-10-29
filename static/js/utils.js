@@ -33,3 +33,16 @@ function show(id){
   STATE.view=id;
   syncHash();
 }
+
+function setText(sel, text){
+  const el = $(sel);
+  if(el) el.textContent = text;
+}
+
+function syncProjectLabels(){
+  setText('#boardTitle', STATE.project || '');
+  setText('#detailProject', STATE.project || '');
+  setText('#fileProject', STATE.project || '');
+  setText('#verProject', STATE.project || '');
+  setText('#traceProject', STATE.project || '');
+}

@@ -5,7 +5,10 @@ regionScroller?.addEventListener('click', async (e)=>{
   if(!card) return;
   try{
     resetFolderNav();
-    await populateDetail(Number(card.dataset.regionId), card.dataset.region, card.dataset.label);
+    STATE.regionId = Number(card.dataset.regionId);
+    STATE.region = card.dataset.region;
+    STATE.regionLabel = card.dataset.label;
+    await populateDetail(STATE.regionId, STATE.region, STATE.regionLabel);
     show('detail');
   }catch(err){
     toast(err.message);
@@ -46,9 +49,8 @@ async function populateDetail(regionId, regionName, regionLabel){
   STATE.regionId = regionId;
   STATE.region = regionName;
   STATE.regionLabel = regionLabel || regionName;
-  $('#detailProject')?.textContent && ($('#detailProject').textContent = STATE.project || '');
-  $('#fileRegion').textContent = STATE.regionLabel;
-  $('#verRegion').textContent = STATE.regionLabel;
+  const verRegion = $('#verRegion');
+  if(verRegion) verRegion.textContent = STATE.regionLabel;
   if(STATE.currentFolderId){
     await resolveFolderFromHash();
   }

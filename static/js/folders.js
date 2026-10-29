@@ -106,6 +106,7 @@ async function refreshFolderListing(){
     });
     list.appendChild(row);
   });
+  await loadFolderFilePreview();
   const btn = $('#newFolderBtn');
   if(btn) btn.style.display = canEdit() ? '' : 'none';
 }

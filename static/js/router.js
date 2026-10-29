@@ -53,10 +53,7 @@ async function routeToState(){
   } else if(['board','detail','files','versions','trace'].includes(STATE.view)){
     $(`.sidebar .nav-item[data-type="project"][data-project-id="${STATE.projectId}"]`)?.classList.add('active');
   }
-  $('#boardTitle').textContent = STATE.project || '';
-  $('#detailProject') && ($('#detailProject').textContent = STATE.project || '');
-  $('#fileProject').textContent = STATE.project || '';
-  $('#verProject').textContent = STATE.project || '';
+  syncProjectLabels();
 
   try{
     if(STATE.view==='inbox'){

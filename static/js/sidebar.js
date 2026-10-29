@@ -49,10 +49,7 @@ $('.sidebar').addEventListener('click', async e=>{
       STATE.file = null;
       STATE.fileId = null;
       resetFolderNav();
-      $('#boardTitle').textContent = STATE.project;
-      $('#detailProject') && ($('#detailProject').textContent = STATE.project);
-      $('#fileProject').textContent = STATE.project;
-      $('#verProject').textContent = STATE.project;
+      syncProjectLabels();
       await loadBoard(STATE.projectId);
       show('board');
       closeSidebar();
