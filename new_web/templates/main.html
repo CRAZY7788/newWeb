@@ -152,6 +152,7 @@
         <div class="toolbar">
           <button class="btn primary" id="newFolderBtn" type="button">新建文件夹</button>
           <button class="btn" id="detailUploadBtn" type="button" style="display:none">上传文档</button>
+          <button class="btn" id="detailCreateBtn" type="button" style="display:none">新建文档</button>
           <button class="btn" id="folderUpBtn" type="button">上一级</button>
           <button class="btn" id="openFolderFilesBtn" type="button" style="display:none">管理文档</button>
           <span class="muted">双击文件夹进入；在文件夹内可上传并管理文档。</span>
@@ -169,7 +170,8 @@
         <div class="crumbs" id="fileCrumbs"></div>
         <div class="toolbar">
           <button class="btn primary" id="uploadBtn">上传文档</button>
-          <span class="muted">支持 .docx / .xlsx / .txt / .zip · 双击下载当前版本 · 右键借还/版本/追溯</span>
+          <button class="btn" id="createBtn">新建文档</button>
+          <span class="muted">支持 .docx / .xlsx / .txt / .zip · 新建 Word/Excel/文本 · 双击下载</span>
         </div>
         <div class="list file-list" id="fileList" role="list"></div>
         <div class="back"><button class="btn" data-back="detail">← 返回</button></div>
@@ -222,6 +224,27 @@
         <label>文件夹名称<input name="name" required maxlength="120" placeholder="例如：设计开发"></label>
         <div class="actions">
           <button type="button" class="btn" id="cancelFolder">取消</button>
+          <button type="submit" class="btn primary">创建</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="dialog" id="createDialog">
+    <div class="card">
+      <h3>新建文档</h3>
+      <form id="createForm" class="grid">
+        <label>文档类型
+          <select name="type" required>
+            <option value="word">Word（.docx）</option>
+            <option value="excel">Excel（.xlsx）</option>
+            <option value="txt">文本（.txt）</option>
+          </select>
+        </label>
+        <label>文档名称<input name="name" placeholder="例如：软件需求说明" required maxlength="120"></label>
+        <label id="createCommentField">初始内容（仅 txt，可选）<textarea name="comment" placeholder="可留空"></textarea></label>
+        <div class="actions">
+          <button type="button" class="btn" id="cancelCreate">取消</button>
           <button type="submit" class="btn primary">创建</button>
         </div>
       </form>

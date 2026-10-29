@@ -2,7 +2,9 @@
 import os
 import hashlib
 import datetime as dt
+import zipfile
 from functools import wraps
+from io import BytesIO
 
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
@@ -23,7 +25,14 @@ TEMPLATE_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "new_web", "template
 STATIC_DIR = os.path.abspath(os.path.join(BASE_DIR, "..", "static"))
 DEFAULT_VERSION_FILE = "versions/history.pdf"
 UPLOAD_ROOT = os.path.join(STATIC_DIR, "versions", "uploads")
+BLANK_TEMPLATE_DIR = os.path.join(STATIC_DIR, "templates")
 FOLDER_MAX_DEPTH = 3
+
+CREATE_KINDS = {
+    "word": {"ext": ".docx", "template": "blank.docx", "file_type": "word"},
+    "excel": {"ext": ".xlsx", "template": "blank.xlsx", "file_type": "excel"},
+    "txt": {"ext": ".txt", "template": "blank.txt", "file_type": "txt"},
+}
 
 ALLOWED_FILE_TYPES = ("word", "excel", "txt", "zip", "other")
 EXT_TO_FILE_TYPE = {
@@ -351,6 +360,115 @@ def save_upload(storage, file_id):
     return rel, fname, len(raw), sha
 
 
+def save_bytes(file_id, original_filename, raw):
+    os.makedirs(os.path.join(UPLOAD_ROOT, str(file_id)), exist_ok=True)
+    sha = hashlib.sha256(raw).hexdigest()
+    fname = secure_filename(original_filename or "file.bin") or "file.bin"
+    stored = f"{sha[:12]}_{fname}"
+    path = os.path.join(UPLOAD_ROOT, str(file_id), stored)
+    with open(path, "wb") as fh:
+        fh.write(raw)
+    rel = os.path.relpath(path, STATIC_DIR).replace("\\", "/")
+    return rel, fname, len(raw), sha
+
+
+def _write_minimal_docx(path):
+    content_types = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>"""
+    rels = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>"""
+    document = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body><w:p><w:r><w:t></w:t></w:r></w:p></w:body>
+</w:document>"""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("word/document.xml", document)
+
+
+def _write_minimal_xlsx(path):
+    content_types = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+</Types>"""
+    rels = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>"""
+    workbook = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
+</workbook>"""
+    wb_rels = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+</Relationships>"""
+    sheet = b"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetData/>
+</worksheet>"""
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", content_types)
+        zf.writestr("_rels/.rels", rels)
+        zf.writestr("xl/workbook.xml", workbook)
+        zf.writestr("xl/_rels/workbook.xml.rels", wb_rels)
+        zf.writestr("xl/worksheets/sheet1.xml", sheet)
+
+
+def ensure_blank_templates():
+    os.makedirs(BLANK_TEMPLATE_DIR, exist_ok=True)
+    txt_path = os.path.join(BLANK_TEMPLATE_DIR, "blank.txt")
+    if not os.path.exists(txt_path):
+        with open(txt_path, "w", encoding="utf-8") as fh:
+            fh.write("")
+    docx_path = os.path.join(BLANK_TEMPLATE_DIR, "blank.docx")
+    if not os.path.exists(docx_path):
+        _write_minimal_docx(docx_path)
+    xlsx_path = os.path.join(BLANK_TEMPLATE_DIR, "blank.xlsx")
+    if not os.path.exists(xlsx_path):
+        _write_minimal_xlsx(xlsx_path)
+
+
+def normalize_create_filename(name, kind):
+    spec = CREATE_KINDS.get(kind)
+    if not spec:
+        return None, "不支持的文档类型"
+    ext = spec["ext"]
+    raw = (name or "").strip() or "未命名文档"
+    base, cur_ext = os.path.splitext(raw)
+    if not cur_ext:
+        raw = raw + ext
+    elif cur_ext.lower() != ext:
+        raw = base + ext
+    display = raw
+    stored_name = secure_filename(raw) or f"doc{ext}"
+    return display, stored_name
+
+
+def template_bytes_for_kind(kind, comment=""):
+    ensure_blank_templates()
+    spec = CREATE_KINDS[kind]
+    path = os.path.join(BLANK_TEMPLATE_DIR, spec["template"])
+    if kind == "txt":
+        text = (comment or "").strip()
+        if not text:
+            with open(path, "rb") as fh:
+                return fh.read()
+        return text.encode("utf-8")
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
 def serialize_folder(folder):
     files = File.query.filter_by(folder_id=folder.id).all()
     child_count = Folder.query.filter_by(parent_id=folder.id).count()
@@ -500,6 +618,7 @@ def seed_if_needed():
 
 with app.app_context():
     ensure_schema()
+    ensure_blank_templates()
     migrate_groups_to_folders()
     seed_if_needed()
 
@@ -782,6 +901,57 @@ def api_upload():
     db.session.flush()
     f.current_version_id = v.id
     log_audit(user.username, "upload", "file", f.id, f.name, fname)
+    db.session.commit()
+    return jsonify({"ok": True, "file": serialize_file(f)})
+
+
+@app.post("/api/files/create")
+@role_required("editor", "approver", "admin")
+def api_files_create():
+    data = request.get_json() or {}
+    folder_id = data.get("folder_id")
+    kind = (data.get("type") or "").strip().lower()
+    name = data.get("name")
+    comment = (data.get("comment") or "").strip()
+    if kind not in CREATE_KINDS:
+        return jsonify({"ok": False, "error": "类型须为 word、excel 或 txt"}), 400
+    if not folder_id:
+        return jsonify({"ok": False, "error": "缺少文件夹"}), 400
+    folder = db.session.get(Folder, folder_id)
+    if not folder:
+        return jsonify({"ok": False, "error": "文件夹不存在"}), 404
+    display_name, stored_fname = normalize_create_filename(name, kind)
+    if display_name is None:
+        return jsonify({"ok": False, "error": stored_fname}), 400
+    user = current_user()
+    ftype, mime = infer_file_type(stored_fname)
+    f = File(
+        name=display_name,
+        title=display_name,
+        file_type=ftype,
+        mime=mime,
+        folder=folder,
+        group_id=folder.id,
+        status="草稿",
+    )
+    db.session.add(f)
+    db.session.flush()
+    raw = template_bytes_for_kind(kind, comment)
+    rel, fname, size, sha = save_bytes(f.id, stored_fname, raw)
+    v = FileVersion(
+        file=f,
+        label="V1",
+        author=user.username,
+        rel_path=rel,
+        original_filename=fname,
+        size_bytes=size,
+        sha256=sha,
+        comment=comment or "新建文档",
+    )
+    db.session.add(v)
+    db.session.flush()
+    f.current_version_id = v.id
+    log_audit(user.username, "create", "file", f.id, f.name, kind)
     db.session.commit()
     return jsonify({"ok": True, "file": serialize_file(f)})
 

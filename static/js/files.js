@@ -40,7 +40,7 @@ function appendFileRows(container, files, { interactive = true } = {}){
   if(!container) return;
   container.innerHTML = '';
   if(!files.length){
-    container.innerHTML = '<div class="row"><span></span><span class="muted">暂无文档，可点击「上传文档」。</span><span></span><span></span><span></span><span></span><span></span></div>';
+    container.innerHTML = '<div class="row"><span></span><span class="muted">暂无文档，可「新建」或「上传」。</span><span></span><span></span><span></span><span></span><span></span></div>';
     return;
   }
   const head = document.createElement('div');
@@ -102,7 +102,9 @@ async function openFiles(folderId, folderName, opts = {}){
   }
   renderFileViewCrumbs(folderId, folderName);
   const uploadBtn = $('#uploadBtn');
+  const createBtn = $('#createBtn');
   if(uploadBtn) uploadBtn.style.display = canEdit() ? '' : 'none';
+  if(createBtn) createBtn.style.display = canEdit() ? '' : 'none';
   const json = await api('/api/files?folder_id=' + folderId);
   appendFileRows(fileList, json.files, { interactive: true });
   if(!opts.silent) show('files');
@@ -113,15 +115,18 @@ async function loadFolderFilePreview(){
   const block = $('#folderFilesBlock');
   const list = $('#folderFileList');
   const uploadBtn = $('#detailUploadBtn');
+  const createBtn = $('#detailCreateBtn');
   const manageBtn = $('#openFolderFilesBtn');
   if(!STATE.currentFolderId){
     if(block) block.hidden = true;
     if(uploadBtn) uploadBtn.style.display = 'none';
+    if(createBtn) createBtn.style.display = 'none';
     if(manageBtn) manageBtn.style.display = 'none';
     return;
   }
   if(block) block.hidden = false;
   if(uploadBtn) uploadBtn.style.display = canEdit() ? '' : 'none';
+  if(createBtn) createBtn.style.display = canEdit() ? '' : 'none';
   if(manageBtn) manageBtn.style.display = '';
   const json = await api('/api/files?folder_id=' + STATE.currentFolderId);
   appendFileRows(list, json.files, { interactive: false });
@@ -177,6 +182,54 @@ function openCheckinDialog(fileId){
 
 $('#uploadBtn')?.addEventListener('click', () => openUploadDialog(STATE.groupId));
 $('#detailUploadBtn')?.addEventListener('click', () => openUploadDialog(STATE.currentFolderId));
+
+const createDialog = $('#createDialog');
+const createForm = $('#createForm');
+
+function updateCreateCommentVisibility(){
+  const type = createForm?.querySelector('[name=type]')?.value;
+  const field = $('#createCommentField');
+  if(field) field.style.display = type === 'txt' ? '' : 'none';
+}
+
+function openCreateDialog(folderId){
+  const fid = folderId || getActiveFolderId();
+  if(!fid){ toast('请先进入文件夹'); return; }
+  if(!canEdit()){ toast('当前角色不能新建'); return; }
+  STATE.groupId = fid;
+  createForm.reset();
+  updateCreateCommentVisibility();
+  createDialog.classList.add('open');
+}
+
+$('#createBtn')?.addEventListener('click', () => openCreateDialog(STATE.groupId));
+$('#detailCreateBtn')?.addEventListener('click', () => openCreateDialog(STATE.currentFolderId));
+createForm?.querySelector('[name=type]')?.addEventListener('change', updateCreateCommentVisibility);
+$('#cancelCreate')?.addEventListener('click', () => createDialog.classList.remove('open'));
+createDialog?.addEventListener('click', (e) => { if(e.target === createDialog) createDialog.classList.remove('open'); });
+
+createForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(createForm);
+  const folderId = getActiveFolderId();
+  const body = {
+    folder_id: folderId,
+    type: fd.get('type'),
+    name: (fd.get('name') || '').trim(),
+    comment: (fd.get('comment') || '').trim(),
+  };
+  try{
+    await api('/api/files/create', { method: 'POST', body: JSON.stringify(body) });
+    createDialog.classList.remove('open');
+    toast('已创建');
+    if(STATE.view === 'files' && STATE.groupId){
+      await openFiles(STATE.groupId, STATE.group);
+    }
+    await loadFolderFilePreview();
+  }catch(err){
+    toast(err.message);
+  }
+});
 
 $('#cancelUpload')?.addEventListener('click', () => uploadDialog.classList.remove('open'));
 uploadDialog?.addEventListener('click', (e) => { if(e.target === uploadDialog) uploadDialog.classList.remove('open'); });
