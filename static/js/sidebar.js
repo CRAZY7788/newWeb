@@ -43,14 +43,14 @@ $('.sidebar').addEventListener('click', async e=>{
     if(type==='project'){
       STATE.project = item.dataset.project;
       STATE.projectId = Number(item.dataset.projectId);
-      STATE.region = null;
       STATE.regionId = null;
       STATE.group = null;
       STATE.groupId = null;
       STATE.file = null;
       STATE.fileId = null;
+      resetFolderNav();
       $('#boardTitle').textContent = STATE.project;
-      $('#detailProject').textContent = STATE.project;
+      $('#detailProject') && ($('#detailProject').textContent = STATE.project);
       $('#fileProject').textContent = STATE.project;
       $('#verProject').textContent = STATE.project;
       await loadBoard(STATE.projectId);

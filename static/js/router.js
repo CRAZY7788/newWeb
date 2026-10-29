@@ -5,6 +5,7 @@ function syncHash(){
   if(STATE.projectId) p.set('pid', STATE.projectId);
   if(STATE.region) p.set('region', STATE.region);
   if(STATE.regionId) p.set('rid', STATE.regionId);
+  if(STATE.currentFolderId != null) p.set('cfid', STATE.currentFolderId);
   if(STATE.group) p.set('group', STATE.group);
   if(STATE.groupId) p.set('gid', STATE.groupId);
   if(STATE.file) p.set('file', STATE.file);
@@ -19,6 +20,11 @@ function parseHash(){
   STATE.projectId = p.get('pid') ? Number(p.get('pid')) : STATE.projectId;
   STATE.region = p.get('region') || STATE.region;
   STATE.regionId = p.get('rid') ? Number(p.get('rid')) : STATE.regionId;
+  if(p.has('cfid')){
+    STATE.currentFolderId = Number(p.get('cfid'));
+  } else if(STATE.view === 'detail'){
+    STATE.currentFolderId = null;
+  }
   STATE.group = p.get('group') || STATE.group;
   STATE.groupId = p.get('gid') ? Number(p.get('gid')) : STATE.groupId;
   STATE.file = p.get('file') || STATE.file;
@@ -48,7 +54,7 @@ async function routeToState(){
     $(`.sidebar .nav-item[data-type="project"][data-project-id="${STATE.projectId}"]`)?.classList.add('active');
   }
   $('#boardTitle').textContent = STATE.project || '';
-  $('#detailProject').textContent = STATE.project || '';
+  $('#detailProject') && ($('#detailProject').textContent = STATE.project || '');
   $('#fileProject').textContent = STATE.project || '';
   $('#verProject').textContent = STATE.project || '';
 

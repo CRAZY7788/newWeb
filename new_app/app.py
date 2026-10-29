@@ -344,12 +344,51 @@ def serialize_folder(folder):
         "name": folder.name,
         "parent_id": folder.parent_id,
         "region_id": folder.region_id,
+        "depth": folder_level(folder),
         "file_count": len(files),
         "child_count": child_count,
         "accepted": sum(1 for f in files if f.status == "已验收"),
         "created_at": folder.created_at.isoformat() if folder.created_at else None,
         "created_by": folder.created_by,
     }
+
+
+def folder_level(folder):
+    level = 1
+    current = folder
+    while current.parent_id:
+        level += 1
+        current = db.session.get(Folder, current.parent_id)
+        if not current:
+            break
+    return level
+
+
+def folder_name_taken(name, region_id, parent_id):
+    q = Folder.query.filter_by(name=name, region_id=region_id)
+    if parent_id is None:
+        q = q.filter(Folder.parent_id.is_(None))
+    else:
+        q = q.filter_by(parent_id=parent_id)
+    return q.first() is not None
+
+
+def folder_is_empty(folder_id):
+    if File.query.filter_by(folder_id=folder_id).count():
+        return False
+    if Folder.query.filter_by(parent_id=folder_id).count():
+        return False
+    return True
+
+
+def folder_ancestors(folder):
+    chain = []
+    current = folder
+    while current:
+        chain.append(current)
+        current = db.session.get(Folder, current.parent_id) if current.parent_id else None
+    chain.reverse()
+    return chain
 
 
 def seed_if_needed():
@@ -559,6 +598,94 @@ def api_folders():
         q = q.filter_by(parent_id=int(parent_raw))
     folders = [serialize_folder(f) for f in q.order_by(Folder.id.asc()).all()]
     return jsonify({"ok": True, "folders": folders})
+
+
+@app.get("/api/folders/<int:folder_id>")
+@login_required
+def api_folder_detail(folder_id):
+    folder = db.session.get(Folder, folder_id)
+    if not folder:
+        return jsonify({"ok": False, "error": "文件夹不存在"}), 404
+    path = [serialize_folder(f) for f in folder_ancestors(folder)]
+    return jsonify({"ok": True, "folder": serialize_folder(folder), "path": path})
+
+
+@app.post("/api/folders")
+@role_required("editor", "approver", "admin")
+def api_folders_create():
+    data = request.get_json() or {}
+    name = (data.get("name") or "").strip()
+    region_id = data.get("region_id")
+    parent_id = data.get("parent_id")
+    if parent_id in ("", "null", "none"):
+        parent_id = None
+    if not name:
+        return jsonify({"ok": False, "error": "名称不能为空"}), 400
+    if not region_id:
+        return jsonify({"ok": False, "error": "缺少地区"}), 400
+    region = db.session.get(Region, region_id)
+    if not region:
+        return jsonify({"ok": False, "error": "地区不存在"}), 404
+    parent = None
+    if parent_id is not None:
+        parent_id = int(parent_id)
+        parent = db.session.get(Folder, parent_id)
+        if not parent:
+            return jsonify({"ok": False, "error": "父文件夹不存在"}), 404
+        if parent.region_id != region_id:
+            return jsonify({"ok": False, "error": "父文件夹不在同一地区"}), 400
+        if folder_level(parent) >= FOLDER_MAX_DEPTH:
+            return jsonify({"ok": False, "error": f"文件夹层级不能超过 {FOLDER_MAX_DEPTH} 层"}), 400
+    if folder_name_taken(name, region_id, parent_id):
+        return jsonify({"ok": False, "error": "同级目录下已有同名文件夹"}), 400
+    user = current_user()
+    folder = Folder(
+        name=name,
+        region_id=region_id,
+        parent_id=parent_id,
+        created_by=user.username if user else None,
+    )
+    db.session.add(folder)
+    db.session.flush()
+    log_audit(user.username, "folder_create", "folder", folder.id, folder.name, "")
+    db.session.commit()
+    return jsonify({"ok": True, "folder": serialize_folder(folder)})
+
+
+@app.patch("/api/folders/<int:folder_id>")
+@role_required("editor", "approver", "admin")
+def api_folders_rename(folder_id):
+    folder = db.session.get(Folder, folder_id)
+    if not folder:
+        return jsonify({"ok": False, "error": "文件夹不存在"}), 404
+    data = request.get_json() or {}
+    name = (data.get("name") or "").strip()
+    if not name:
+        return jsonify({"ok": False, "error": "名称不能为空"}), 400
+    if name != folder.name and folder_name_taken(name, folder.region_id, folder.parent_id):
+        return jsonify({"ok": False, "error": "同级目录下已有同名文件夹"}), 400
+    old = folder.name
+    folder.name = name
+    user = current_user()
+    log_audit(user.username, "folder_rename", "folder", folder.id, folder.name, old)
+    db.session.commit()
+    return jsonify({"ok": True, "folder": serialize_folder(folder)})
+
+
+@app.delete("/api/folders/<int:folder_id>")
+@role_required("editor", "approver", "admin")
+def api_folders_delete(folder_id):
+    folder = db.session.get(Folder, folder_id)
+    if not folder:
+        return jsonify({"ok": False, "error": "文件夹不存在"}), 404
+    if not folder_is_empty(folder_id):
+        return jsonify({"ok": False, "error": "文件夹非空，无法删除"}), 400
+    user = current_user()
+    name = folder.name
+    db.session.delete(folder)
+    log_audit(user.username, "folder_delete", "folder", folder_id, name, "")
+    db.session.commit()
+    return jsonify({"ok": True})
 
 
 @app.get("/api/files")

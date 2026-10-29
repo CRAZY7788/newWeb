@@ -1,9 +1,10 @@
-const regionScroller=$('#regionScroller'), detailRegion=$('#detailRegion'), detailList=$('#detailList');
+const regionScroller=$('#regionScroller');
 
 regionScroller?.addEventListener('click', async (e)=>{
   const card=e.target.closest('.status-card');
   if(!card) return;
   try{
+    resetFolderNav();
     await populateDetail(Number(card.dataset.regionId), card.dataset.region, card.dataset.label);
     show('detail');
   }catch(err){
@@ -16,7 +17,7 @@ async function loadBoard(projectId){
   const json = await api('/api/regions?project_id='+projectId);
   STATE.regions = json.regions;
   regionScroller.innerHTML = '';
-  json.regions.forEach((r, idx)=>{
+  json.regions.forEach((r)=>{
     const art = document.createElement('article');
     art.className = 'status-card';
     art.dataset.region = r.name;
@@ -45,20 +46,11 @@ async function populateDetail(regionId, regionName, regionLabel){
   STATE.regionId = regionId;
   STATE.region = regionName;
   STATE.regionLabel = regionLabel || regionName;
-  detailRegion.textContent = STATE.regionLabel;
+  $('#detailProject')?.textContent && ($('#detailProject').textContent = STATE.project || '');
   $('#fileRegion').textContent = STATE.regionLabel;
   $('#verRegion').textContent = STATE.regionLabel;
-
-  const json = await api('/api/groups?region_id='+regionId);
-  STATE.groups = json.groups;
-  detailList.innerHTML = '';
-  json.groups.forEach((g, idx)=>{
-    const row=document.createElement('div');
-    row.className='row';
-    row.dataset.group = g.name;
-    row.dataset.groupId = g.id;
-    row.innerHTML = `<span class="idx">${idx+1}.</span><span><b>${STATE.region} · </b>${g.name}</span><span class="tag">${g.accepted}/${g.file_count}</span><span>${g.file_count} 个文件</span><span></span>`;
-    row.ondblclick = ()=> openFiles(g.id, g.name);
-    detailList.appendChild(row);
-  });
+  if(STATE.currentFolderId){
+    await resolveFolderFromHash();
+  }
+  await refreshFolderListing();
 }

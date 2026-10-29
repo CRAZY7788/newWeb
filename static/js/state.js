@@ -5,12 +5,15 @@ const STATE = {
   region: 'China',
   regionId: null,
   regionLabel: '',
+  currentFolderId: null,
+  folderStack: [],
   group: null,
   groupId: null,
   file: null,
   fileId: null,
   projectList: [],
   regions: [],
+  folders: [],
   groups: []
 };
 const PERM = { role: 'approver' };

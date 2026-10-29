@@ -144,11 +144,16 @@
         <p style="color:var(--muted); margin:.3rem 0 0">提示：点击某个地区进入明细列表。</p>
       </section>
 
-      <!-- B: Region list -->
-      <section id="detailView" class="panel" aria-label="地区详情" hidden>
-        <div class="crumbs"><span id="detailProject">项目 1</span><span class="slash">/</span><span id="detailRegion">China · NMPA</span></div>
+      <!-- B: Folder browser -->
+      <section id="detailView" class="panel" aria-label="文件夹" hidden>
+        <div class="crumbs" id="folderBreadcrumbs"></div>
+        <div class="toolbar">
+          <button class="btn primary" id="newFolderBtn" type="button">新建文件夹</button>
+          <button class="btn" id="folderUpBtn" type="button">上一级</button>
+          <span class="muted">双击文件夹进入；点「文档」查看该目录下的文件。</span>
+        </div>
         <div class="list" id="detailList" role="list"></div>
-        <div class="back"><button class="btn" data-back="board">← 返回</button></div>
+        <div class="back"><button class="btn" data-back="board">← 返回看板</button></div>
       </section>
 
       <!-- C: Files -->
@@ -201,6 +206,19 @@
 
   <!-- context menu modal -->
   <div class="modal" id="ctxModal"><div class="menu" id="ctxMenu" role="menu" aria-label="菜单"></div></div>
+
+  <div class="dialog" id="folderDialog">
+    <div class="card">
+      <h3>新建文件夹</h3>
+      <form id="folderForm" class="grid">
+        <label>文件夹名称<input name="name" required maxlength="120" placeholder="例如：设计开发"></label>
+        <div class="actions">
+          <button type="button" class="btn" id="cancelFolder">取消</button>
+          <button type="submit" class="btn primary">创建</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <div class="dialog" id="uploadDialog">
     <div class="card">
@@ -262,6 +280,7 @@
 <script src="{{ url_for('static', filename='js/sidebar.js') }}"></script>
 <script src="{{ url_for('static', filename='js/acceptance.js') }}"></script>
 <script src="{{ url_for('static', filename='js/board.js') }}"></script>
+<script src="{{ url_for('static', filename='js/folders.js') }}"></script>
 <script src="{{ url_for('static', filename='js/files.js') }}"></script>
 <script src="{{ url_for('static', filename='js/versions.js') }}"></script>
 <script src="{{ url_for('static', filename='js/templates.js') }}"></script>

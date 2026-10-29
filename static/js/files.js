@@ -8,7 +8,7 @@ async function openFiles(groupId, groupName, opts={}){
   fileGroup.textContent = groupName;
   const uploadBtn = $('#uploadBtn');
   if(uploadBtn) uploadBtn.style.display = canEdit() ? '' : 'none';
-  const json = await api('/api/files?group_id='+groupId);
+  const json = await api('/api/files?folder_id='+groupId);
   fileList.innerHTML = '';
   json.files.forEach((f, idx)=>{
     const checked = !!f.checked_out_by;

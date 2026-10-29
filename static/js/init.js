@@ -13,11 +13,12 @@ async function boot(){
     const back = btn.dataset.back;
     STATE.file = null;
     STATE.fileId = null;
-    if(back==='detail'){
+    if(back==='board'){
+      resetFolderNav();
       STATE.group = null;
       STATE.groupId = null;
     }
-    if(back==='board'){
+    if(back==='detail'){
       STATE.group = null;
       STATE.groupId = null;
     }
