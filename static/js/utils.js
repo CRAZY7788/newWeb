@@ -22,7 +22,9 @@ const views = {
   detail: $('#detailView'),
   files: $('#fileView'),
   versions: $('#versionView'),
-  trace: $('#traceView')
+  trace: $('#traceView'),
+  qms: $('#qmsView'),
+  templates: $('#templatesView')
 };
 function show(id){
   Object.values(views).forEach(v=>{ if(v) v.hidden=true; });

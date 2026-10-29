@@ -60,8 +60,12 @@ $('.sidebar').addEventListener('click', async e=>{
       await loadAcceptance();
       show('inbox');
       closeSidebar();
-    }else if(type==='template'){
-      toast('模板库稍后接入');
+    }else if(type==='qms'){
+      show('qms');
+      closeSidebar();
+    }else if(type==='templates'){
+      await loadTemplateCatalog();
+      show('templates');
       closeSidebar();
     }
   }catch(err){

@@ -1,0 +1,20 @@
+[
+  {
+    "id": "tpl-62304-sdp",
+    "name": "IEC 62304 软件开发计划（空白）",
+    "category": "IEC 62304",
+    "description": "医疗器械软件生存周期 — 软件开发计划模板"
+  },
+  {
+    "id": "tpl-82304-sec",
+    "name": "ISO 82304 安全说明（空白）",
+    "category": "ISO 82304",
+    "description": "健康软件 — 安全与性能说明章节结构"
+  },
+  {
+    "id": "tpl-sop-doc",
+    "name": "受控文档 SOP（空白）",
+    "category": "QMS",
+    "description": "文档编制、评审、批准与发布流程"
+  }
+]

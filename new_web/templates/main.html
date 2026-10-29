@@ -85,6 +85,8 @@
     /* toast */
     .toasts{position:fixed; right:14px; top:14px; display:grid; gap:.6rem; z-index:80}
     .toast{background:var(--card); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow); padding:.6rem .8rem; min-width:220px}
+    .placeholder-box{border:1px dashed var(--border); border-radius:12px; padding:1.2rem 1.4rem; background:var(--bg); max-width:640px}
+    .placeholder-box h3{margin:.2rem 0 .6rem}
   </style>
 </head>
 <body>
@@ -120,7 +122,9 @@
       <div class="group-title">项目</div>
       <div id="projectNav"></div>
       <div class="spacer"></div>
-      <div class="nav-item template" data-type="template">模板库</div>
+      <div class="group-title">体系与模板</div>
+      <div class="nav-item" data-type="qms">QMS</div>
+      <div class="nav-item" data-type="templates">模版库</div>
     </aside>
     <div class="overlay" id="overlay"></div>
 
@@ -163,6 +167,23 @@
         <div class="crumbs"><span id="verProject">项目 1</span><span class="slash">/</span><span id="verRegion">China · NMPA</span><span class="slash">/</span><span id="verFile">文件 A</span><span class="slash">/</span><span>历史版本</span></div>
         <div class="h-scroll" id="versionScroller"></div>
         <div class="back"><button class="btn" data-back="files">← 返回</button></div>
+      </section>
+
+      <!-- F: QMS -->
+      <section id="qmsView" class="panel" aria-label="QMS" hidden>
+        <div class="crumbs"><span>QMS</span><span class="slash">/</span><span>质量体系</span></div>
+        <div class="placeholder-box">
+          <h3>QMS 入口</h3>
+          <p class="muted">此处将接入你的质量管理体系（程序文件、记录、CAPA、培训等）。与左侧「项目」中的受控产品文档相互独立，共用同一登录与工作台。</p>
+          <p class="muted" style="margin-top:.8rem">当前为占位页。后续可在此挂载 <code>/qms</code> 子模块或嵌入页面。</p>
+        </div>
+      </section>
+
+      <!-- G: 模版库 -->
+      <section id="templatesView" class="panel" aria-label="模版库" hidden>
+        <div class="crumbs"><span>模版库</span><span class="slash">/</span><span>合规模板</span></div>
+        <p class="muted" style="margin-top:0">只读模板目录；双击行可打开示例文件。日后可支持「从模板创建」并进入项目受控库。</p>
+        <div class="list" id="templateList" role="list"></div>
       </section>
 
       <!-- E: Trace -->
@@ -243,6 +264,7 @@
 <script src="{{ url_for('static', filename='js/board.js') }}"></script>
 <script src="{{ url_for('static', filename='js/files.js') }}"></script>
 <script src="{{ url_for('static', filename='js/versions.js') }}"></script>
+<script src="{{ url_for('static', filename='js/templates.js') }}"></script>
 <script src="{{ url_for('static', filename='js/router.js') }}"></script>
 <script src="{{ url_for('static', filename='js/init.js') }}"></script>
 

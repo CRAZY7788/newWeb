@@ -40,7 +40,11 @@ async function routeToState(){
   $$('.sidebar .nav-item').forEach(n=>n.classList.remove('active'));
   if(STATE.view==='inbox'){
     $('.sidebar .nav-item[data-type="inbox"]')?.classList.add('active');
-  } else {
+  } else if(STATE.view==='qms'){
+    $('.sidebar .nav-item[data-type="qms"]')?.classList.add('active');
+  } else if(STATE.view==='templates'){
+    $('.sidebar .nav-item[data-type="templates"]')?.classList.add('active');
+  } else if(['board','detail','files','versions','trace'].includes(STATE.view)){
     $(`.sidebar .nav-item[data-type="project"][data-project-id="${STATE.projectId}"]`)?.classList.add('active');
   }
   $('#boardTitle').textContent = STATE.project || '';
@@ -51,6 +55,11 @@ async function routeToState(){
   try{
     if(STATE.view==='inbox'){
       show('inbox');
+    } else if(STATE.view==='qms'){
+      show('qms');
+    } else if(STATE.view==='templates'){
+      await loadTemplateCatalog();
+      show('templates');
     } else {
       resolveProject();
       await loadBoard(STATE.projectId);
