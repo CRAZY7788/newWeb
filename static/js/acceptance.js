@@ -84,6 +84,10 @@ function openDialog(type,row){
     reasonField.hidden=false;
     authFields.hidden=true;
   }
+  dialogForm.querySelectorAll('input,textarea').forEach(el => { el.required = false; });
+  if(type==='reject'){
+    reasonField.querySelector('textarea').required = false;
+  }
   dialogForm.reset();
   formDialog.classList.add('open');
   dialogForm.onsubmit = async (e)=>{

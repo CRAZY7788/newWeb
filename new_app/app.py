@@ -32,9 +32,12 @@ REGION_LABELS = {
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR, static_url_path="/static")
 app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret")
-app.config["SQLALCHEMY_DATABASE_URI"] = os.environ.get(
-    "DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}"
-)
+_db_uri = os.environ.get("DATABASE_URL", f"sqlite:///{os.path.join(BASE_DIR, 'app.db')}")
+if _db_uri.startswith("sqlite:///") and not _db_uri.startswith("sqlite:////"):
+    _rest = _db_uri[len("sqlite:///"):]
+    if _rest and not os.path.isabs(_rest):
+        _db_uri = "sqlite:///" + os.path.join(BASE_DIR, _rest)
+app.config["SQLALCHEMY_DATABASE_URI"] = _db_uri
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
 

@@ -2,17 +2,33 @@
 <html lang="zh">
 <head>
   <meta charset="UTF-8">
-  <title>登录</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 · 合规工作台</title>
+  <style>
+    body{font-family:system-ui,-apple-system,sans-serif;background:#f7f7fb;color:#111827;margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center}
+    .card{width:min(380px,92vw);background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:1.4rem 1.5rem;box-shadow:0 6px 24px rgba(0,0,0,.08)}
+    h2{margin:.2rem 0 1rem}
+    label{display:block;margin:.7rem 0 .35rem;color:#6b7280;font-size:.9rem}
+    input{width:100%;box-sizing:border-box;padding:.6rem .8rem;border:1px solid #e5e7eb;border-radius:10px}
+    button{margin-top:1rem;width:100%;padding:.65rem;border:0;border-radius:10px;background:#2563eb;color:#fff;cursor:pointer;font-weight:600}
+    .hint{color:#6b7280;font-size:.85rem;margin-top:1rem;line-height:1.5}
+    .error{color:#ef4444}
+  </style>
 </head>
 <body>
-  <h2>用户登录</h2>
-  <form method="POST">
-    <label>用户名: <input type="text" name="username"></label><br>
-    <label>密码: <input type="password" name="password"></label><br>
-    <button type="submit">登录</button>
-  </form>
-  {% if error %}
-    <p style="color:red">{{ error }}</p>
-  {% endif %}
+  <div class="card">
+    <h2>合规工作台</h2>
+    <form method="POST">
+      <label>用户名或邮箱</label>
+      <input type="text" name="username" autocomplete="username" required>
+      <label>密码</label>
+      <input type="password" name="password" autocomplete="current-password" required>
+      <button type="submit">登录</button>
+    </form>
+    {% if error %}
+      <p class="error">{{ error }}</p>
+    {% endif %}
+    <p class="hint">演示账号：admin / admin123<br>也可使用 approver、editor、viewer，密码均为用户名加 123。</p>
+  </div>
 </body>
 </html>

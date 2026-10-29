@@ -65,12 +65,16 @@ async function routeToState(){
         else show('detail');
       } else if(STATE.view==='versions'){
         await populateDetail(STATE.regionId, STATE.region, STATE.regionLabel);
-        if(STATE.groupId) await openFiles(STATE.groupId, STATE.group);
+        if(STATE.groupId) await openFiles(STATE.groupId, STATE.group, {silent:true});
         if(STATE.fileId){
           $('#verFile').textContent = STATE.file || '';
           await populateVersions(STATE.fileId, STATE.file);
           show('versions');
         }
+      } else if(STATE.view==='trace'){
+        await populateDetail(STATE.regionId, STATE.region, STATE.regionLabel);
+        if(STATE.groupId) await openFiles(STATE.groupId, STATE.group, {silent:true});
+        if(STATE.fileId) await openTrace(STATE.fileId, STATE.file);
       }
     }
   }catch(err){

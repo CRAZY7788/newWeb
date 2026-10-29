@@ -25,7 +25,8 @@ const views = {
   trace: $('#traceView')
 };
 function show(id){
-  Object.values(views).forEach(v=>v.hidden=true);
+  Object.values(views).forEach(v=>{ if(v) v.hidden=true; });
+  if(!views[id]) return;
   views[id].hidden=false;
   STATE.view=id;
   syncHash();
