@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtualenv
+.venv/
+venv/
+
+# Env & secrets
+.env
+.env.*
+
+# IDE
+.idea/
+
+# Pytest
+.pytest_cache/
+new_app/tests/pytest_*.db
+
+# Runtime uploads (keep static/versions/history.pdf etc.)
+static/versions/uploads/
+
+# OS
+.DS_Store
