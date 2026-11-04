@@ -10,7 +10,7 @@ from io import BytesIO
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
-from sqlalchemy import inspect, text, or_, and_
+from sqlalchemy import inspect, text, or_, and_, func
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 
@@ -70,6 +70,22 @@ REGION_LABELS = {
     "EU": "EU · MDR",
     "FDA": "US · FDA",
     "UK": "UK · MHRA",
+}
+
+AUDIT_ACTION_LABELS = {
+    "upload": "上传",
+    "create": "新建",
+    "checkout": "借出",
+    "checkin": "归还",
+    "accept": "验收通过",
+    "reject": "验收拒绝",
+    "rename": "重命名",
+    "move": "移动",
+    "void": "作废",
+    "delete": "删除",
+    "folder_create": "新建文件夹",
+    "folder_rename": "重命名文件夹",
+    "folder_delete": "删除文件夹",
 }
 
 app = Flask(__name__, template_folder=TEMPLATE_DIR, static_folder=STATIC_DIR, static_url_path="/static")
@@ -298,6 +314,27 @@ def normalize_rename_filename(name, file_obj):
 
 def folder_display_path(folder):
     return " / ".join(f.name for f in folder_ancestors(folder))
+
+
+def audit_action_label(action):
+    return AUDIT_ACTION_LABELS.get(action or "", action or "—")
+
+
+def file_location_payload(file_obj):
+    folder = file_obj.folder
+    if not folder:
+        return None
+    region = folder.region
+    project = region.project if region else None
+    return {
+        "project_id": project.id if project else None,
+        "project_name": project.name if project else None,
+        "region_id": region.id if region else None,
+        "region_name": region.name if region else None,
+        "region_label": region_label(region.name) if region else None,
+        "folder_id": folder.id,
+        "folder_path": folder_display_path(folder),
+    }
 
 
 def checkin_error(file_obj, user):
@@ -986,6 +1023,76 @@ def api_files():
     return jsonify({"ok": True, "files": [serialize_file(f, user) for f in q.order_by(File.id.asc()).all()]})
 
 
+@app.get("/api/search")
+@login_required
+def api_search():
+    q = (request.args.get("q") or "").strip()
+    project_id = request.args.get("project_id", type=int)
+    try:
+        limit = int(request.args.get("limit", 25))
+    except (TypeError, ValueError):
+        limit = 25
+    limit = max(1, min(limit, 50))
+    if not q:
+        return jsonify({"ok": True, "q": "", "files": [], "folders": []})
+
+    pattern = f"%{q.lower()}%"
+    file_q = (
+        File.query.join(Folder, File.folder_id == Folder.id)
+        .join(Region, Folder.region_id == Region.id)
+        .join(Project, Region.project_id == Project.id)
+        .filter(File.status != FILE_STATUS_VOID)
+        .filter(
+            or_(
+                func.lower(File.name).like(pattern),
+                func.lower(File.title).like(pattern),
+                and_(File.doc_code.isnot(None), func.lower(File.doc_code).like(pattern)),
+            )
+        )
+    )
+    folder_q = (
+        Folder.query.join(Region, Folder.region_id == Region.id)
+        .join(Project, Region.project_id == Project.id)
+        .filter(func.lower(Folder.name).like(pattern))
+    )
+    if project_id:
+        file_q = file_q.filter(Project.id == project_id)
+        folder_q = folder_q.filter(Project.id == project_id)
+
+    files_out = []
+    for f in file_q.order_by(File.name.asc()).limit(limit).all():
+        loc = file_location_payload(f)
+        files_out.append({
+            "id": f.id,
+            "name": f.title or f.name,
+            "status": f.status,
+            "file_type": f.file_type or "other",
+            "doc_code": f.doc_code,
+            "location": loc,
+        })
+
+    folders_out = []
+    for folder in folder_q.order_by(Folder.name.asc()).limit(min(limit, 20)).all():
+        region = folder.region
+        project = region.project if region else None
+        folders_out.append({
+            "id": folder.id,
+            "name": folder.name,
+            "path": folder_display_path(folder),
+            "location": {
+                "project_id": project.id if project else None,
+                "project_name": project.name if project else None,
+                "region_id": region.id if region else None,
+                "region_name": region.name if region else None,
+                "region_label": region_label(region.name) if region else None,
+                "folder_id": folder.id,
+                "folder_path": folder_display_path(folder),
+            },
+        })
+
+    return jsonify({"ok": True, "q": q, "files": files_out, "folders": folders_out})
+
+
 @app.patch("/api/files/<int:file_id>")
 @role_required("editor", "approver", "admin")
 def api_files_patch(file_id):
@@ -1283,23 +1390,26 @@ def api_checkin():
 @login_required
 def api_trace():
     fid = request.args.get("file_id", type=int)
+    if not fid:
+        return jsonify({"ok": False, "error": "缺少 file_id"}), 400
     f = db.session.get(File, fid)
     if not f:
         return jsonify({"ok": False, "error": "文件不存在"}), 404
+    user = current_user()
     versions = FileVersion.query.filter_by(file_id=fid).order_by(FileVersion.date.asc()).all()
+    current_id = f.current_version_id
     logs = (
         AuditLog.query.filter(
-            or_(
-                and_(AuditLog.target_type == "file", AuditLog.target_id == fid),
-                and_(AuditLog.target_type.is_(None), AuditLog.target == f.name),
-            )
+            AuditLog.target_type == "file",
+            AuditLog.target_id == fid,
         )
-        .order_by(AuditLog.created_at.desc())
+        .order_by(AuditLog.created_at.asc())
         .all()
     )
     return jsonify({
         "ok": True,
-        "file": serialize_file(f, current_user()),
+        "file": serialize_file(f, user),
+        "location": file_location_payload(f),
         "versions": [
             {
                 "id": v.id,
@@ -1309,6 +1419,8 @@ def api_trace():
                 "comment": v.comment,
                 "sha256": v.sha256,
                 "original_filename": v.original_filename,
+                "size_bytes": v.size_bytes or 0,
+                "is_current": v.id == current_id,
             }
             for v in versions
         ],
@@ -1317,6 +1429,7 @@ def api_trace():
                 "id": a.id,
                 "user": a.user,
                 "action": a.action,
+                "action_label": audit_action_label(a.action),
                 "detail": a.detail,
                 "created_at": a.created_at.strftime("%Y-%m-%d %H:%M") if a.created_at else "",
             }

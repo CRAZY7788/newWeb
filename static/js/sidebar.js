@@ -6,13 +6,6 @@ function closeSidebar(){ sidebar.classList.remove('open'); overlay.classList.rem
 toggleSidebar.addEventListener('click', ()=> sidebar.classList.contains('open') ? closeSidebar() : openSidebar());
 overlay.addEventListener('click', closeSidebar);
 
-$('#searchInput').addEventListener('input', e=>{
-  const q = e.target.value.trim().toLowerCase();
-  $$('#projectNav .nav-item').forEach(n => {
-    n.style.display = (n.dataset.project.toLowerCase().includes(q) || q==='') ? '' : 'none';
-  });
-});
-
 async function loadProjects(){
   const json = await api('/api/projects');
   STATE.projectList = json.projects;

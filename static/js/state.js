@@ -11,6 +11,7 @@ const STATE = {
   groupId: null,
   file: null,
   fileId: null,
+  traceReturnView: 'files',
   projectList: [],
   regions: [],
   folders: [],

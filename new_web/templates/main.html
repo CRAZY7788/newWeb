@@ -21,6 +21,15 @@
     .search{position:relative; width:min(460px,40vw)}
     .search input{width:100%; padding:.6rem 2.2rem .6rem .8rem; border:1px solid var(--border); border-radius:10px; background:var(--bg); color:var(--text)}
     .search svg{position:absolute; right:.5rem; top:50%; transform:translateY(-50%); opacity:.6}
+    .search-panel{position:absolute; left:0; right:0; top:calc(100% + 6px); max-height:min(420px,50vh); overflow:auto; background:var(--card); border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow); z-index:90; display:none}
+    .search-panel.open{display:block}
+    .search-section{padding:.5rem .7rem .2rem; font-size:.75rem; color:var(--muted); font-weight:600}
+    .search-hit{display:block; width:100%; text-align:left; padding:.55rem .8rem; border:0; border-bottom:1px solid var(--border); background:transparent; color:var(--text); cursor:pointer}
+    .search-hit:last-child{border-bottom:0}
+    .search-hit:hover{background:color-mix(in srgb, var(--brand), transparent 92%)}
+    .search-hit .title{font-weight:600}
+    .search-hit .sub{font-size:.8rem; color:var(--muted); margin-top:.15rem}
+    .search-empty{padding:.8rem; color:var(--muted); font-size:.9rem}
     .btn{display:inline-flex; align-items:center; gap:.4rem; padding:.45rem .7rem; border:1px solid var(--border); border-radius:10px; background:var(--card); cursor:pointer; user-select:none}
     .btn.primary{background:linear-gradient(180deg,var(--brand),var(--brand-2)); color:#fff; border-color:transparent}
     .btn.icon{padding:.4rem .5rem}
@@ -99,7 +108,8 @@
       <div class="brand">欢迎 <span id="who">xxx</span>！</div>
       <div class="sep"></div>
       <div class="search" role="search">
-        <input id="searchInput" type="search" placeholder="Search…" aria-label="Search"/>
+        <input id="searchInput" type="search" placeholder="搜索文档、编号、文件夹…" aria-label="Search" autocomplete="off"/>
+        <div id="searchPanel" class="search-panel" role="listbox" aria-label="搜索结果"></div>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M21 21l-4.3-4.3M10 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
         </svg>
@@ -205,12 +215,13 @@
       <!-- E: Trace -->
       <section id="traceView" class="panel" aria-label="文档追溯" hidden>
         <div class="crumbs"><span id="traceProject">项目 1</span><span class="slash">/</span><span id="traceFile">文件</span><span class="slash">/</span><span>追溯</span></div>
+        <div id="traceLocation" class="muted" style="margin-bottom:.35rem;font-size:.9rem"></div>
         <div id="traceSummary" class="muted" style="margin-bottom:.8rem"></div>
         <h3>版本链</h3>
         <div style="overflow:auto"><table class="trace-table" id="traceVersionTable"></table></div>
         <h3>操作审计</h3>
-        <div class="list" id="traceAuditList"></div>
-        <div class="back"><button class="btn" data-back="files">← 返回</button></div>
+        <div style="overflow:auto"><table class="trace-table" id="traceAuditTable"></table></div>
+        <div class="back"><button class="btn" id="traceBackBtn" type="button">← 返回</button></div>
       </section>
     </main>
   </div>
@@ -346,6 +357,7 @@
 <script src="{{ url_for('static', filename='js/board.js') }}"></script>
 <script src="{{ url_for('static', filename='js/folders.js') }}"></script>
 <script src="{{ url_for('static', filename='js/files.js') }}"></script>
+<script src="{{ url_for('static', filename='js/search.js') }}"></script>
 <script src="{{ url_for('static', filename='js/versions.js') }}"></script>
 <script src="{{ url_for('static', filename='js/templates.js') }}"></script>
 <script src="{{ url_for('static', filename='js/router.js') }}"></script>

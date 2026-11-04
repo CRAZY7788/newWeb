@@ -11,6 +11,13 @@ function fileTypeLabel(t){
   return FILE_TYPE_LABEL[t] || FILE_TYPE_LABEL.other;
 }
 
+function formatFileSize(bytes){
+  const n = Number(bytes) || 0;
+  if(n < 1024) return n + ' B';
+  if(n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
 function renderFileViewCrumbs(folderId, folderName){
   const el = $('#fileCrumbs');
   if(!el) return;
@@ -316,34 +323,67 @@ checkinForm?.addEventListener('submit', async (e) => {
   }
 });
 
-async function openTrace(fileId, fileName){
+async function openTrace(fileId, fileName, returnView){
   STATE.fileId = fileId;
   STATE.file = fileName;
+  STATE.traceReturnView = returnView || (STATE.view === 'files' ? 'files' : (STATE.view === 'detail' ? 'detail' : 'board'));
   $('#traceFile').textContent = fileName;
   $('#traceProject').textContent = STATE.project || '';
   const json = await api('/api/files/trace?file_id=' + fileId);
   const f = json.file || {};
-  $('#traceSummary').textContent = `${f.title || f.name || fileName} · ${fileTypeLabel(f.file_type)} · 状态 ${f.status || ''} · 当前版本 ${f.latest_version || ''}`;
+  const loc = json.location;
+  const locEl = $('#traceLocation');
+  if(locEl){
+    locEl.textContent = loc
+      ? `位置：${loc.project_name} / ${loc.region_label || loc.region_name} / ${loc.folder_path}`
+      : '';
+  }
+  const code = f.doc_code ? ` · 编号 ${f.doc_code}` : '';
+  $('#traceSummary').textContent = `${f.title || f.name || fileName}${code} · ${fileTypeLabel(f.file_type)} · 状态 ${f.status || ''} · 当前版本 ${f.latest_version || ''}`;
   const table = $('#traceVersionTable');
-  table.innerHTML = '<tr><th>版本</th><th>时间</th><th>作者</th><th>说明</th><th>文件</th><th>SHA256</th></tr>';
+  table.innerHTML = '<tr><th>版本</th><th>时间</th><th>作者</th><th>说明</th><th>大小</th><th>SHA256</th><th></th></tr>';
   (json.versions || []).forEach(v => {
     const tr = document.createElement('tr');
-    const hash = v.sha256 ? v.sha256.slice(0, 16) + '…' : '—';
-    tr.innerHTML = `<td>${v.label}</td><td>${v.date || ''}</td><td>${v.author || ''}</td><td>${v.comment || ''}</td><td>${v.original_filename || ''}</td><td class="hash">${hash}</td>`;
+    const hash = v.sha256 || '—';
+    const current = v.is_current ? ' <span class="tag ok">当前</span>' : '';
+    tr.innerHTML = `<td>${v.label}${current}</td><td>${v.date || ''}</td><td>${v.author || ''}</td><td>${v.comment || ''}</td><td>${formatFileSize(v.size_bytes)}</td><td class="hash" title="${hash}">${hash !== '—' ? hash.slice(0, 16) + '…' : '—'}</td><td>${v.original_filename || ''}</td>`;
     tr.style.cursor = 'pointer';
+    tr.title = '点击下载该版本';
     tr.onclick = () => window.open('/versions/download?version_id=' + v.id);
     table.appendChild(tr);
   });
-  const audit = $('#traceAuditList');
-  audit.innerHTML = '';
-  (json.audit || []).forEach((a, idx) => {
-    const row = document.createElement('div');
-    row.className = 'row';
-    row.innerHTML = `<span class="idx">${idx + 1}.</span><span>${a.action}</span><span class="tag">${a.user || ''}</span><span>${a.created_at || ''}</span><span>${a.detail || ''}</span>`;
-    audit.appendChild(row);
-  });
+  const auditTable = $('#traceAuditTable');
+  if(auditTable){
+    auditTable.innerHTML = '<tr><th>#</th><th>时间</th><th>操作</th><th>用户</th><th>详情</th></tr>';
+    (json.audit || []).forEach((a, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${idx + 1}</td><td>${a.created_at || ''}</td><td>${a.action_label || a.action || ''}</td><td>${a.user || ''}</td><td>${a.detail || ''}</td>`;
+      auditTable.appendChild(tr);
+    });
+  }
   show('trace');
+  syncHash();
 }
+
+$('#traceBackBtn')?.addEventListener('click', async () => {
+  const back = STATE.traceReturnView || 'files';
+  STATE.file = null;
+  STATE.fileId = null;
+  try{
+    if(back === 'board'){
+      resetFolderNav();
+      await loadBoard(STATE.projectId);
+    }else if(back === 'detail'){
+      await populateDetail(STATE.regionId, STATE.region, STATE.regionLabel);
+    }else if(back === 'files' && STATE.groupId){
+      await openFiles(STATE.groupId, STATE.group);
+      return;
+    }
+    show(back);
+  }catch(err){
+    toast(err.message);
+  }
+});
 
 const renameDialog = $('#renameDialog');
 const renameForm = $('#renameForm');
