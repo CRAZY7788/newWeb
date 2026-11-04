@@ -108,6 +108,12 @@ function openDialog(type,row){
       }
       formDialog.classList.remove('open');
       await loadAcceptance();
+      if(typeof loadBoard === 'function' && STATE.projectId){
+        try{ await loadBoard(STATE.projectId); }catch(_e){ /* ignore */ }
+      }
+      if(STATE.view === 'files' && typeof refreshFileLists === 'function'){
+        try{ await refreshFileLists(); }catch(_e){ /* ignore */ }
+      }
       toast(type==='approve' ? '已验收' : '已拒绝');
     }catch(err){
       toast(err.message);

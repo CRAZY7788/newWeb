@@ -16,7 +16,7 @@ const STATE = {
   folders: [],
   groups: []
 };
-const PERM = { role: 'approver' };
+const PERM = { role: 'viewer', userId: null, username: '' };
 const DATA = { acceptance: [] };
 
 function canEdit(){

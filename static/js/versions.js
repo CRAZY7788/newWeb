@@ -22,7 +22,8 @@ async function populateVersions(fileId, fileName){
       const card=document.createElement('article');
       card.className='version-card';
       card.style.cursor='pointer';
-      card.innerHTML = `<h3>${v.label}</h3><p style="color:var(--muted)">${fileName}${v.comment ? ' · '+v.comment : ''}</p><p class="meta"><span>${v.date}</span><span>${v.author||''}</span></p>`;
+      const current = v.is_current ? ' · 当前' : '';
+      card.innerHTML = `<h3>${v.label}${current}</h3><p style="color:var(--muted)">${fileName}${v.comment ? ' · '+v.comment : ''}</p><p class="meta"><span>${v.date}</span><span>${v.author||''}</span></p>`;
       card.onclick = ()=> window.open('/versions/download?version_id='+v.id);
       scroller.appendChild(card);
     });

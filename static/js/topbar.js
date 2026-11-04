@@ -12,6 +12,8 @@ async function loadMe(){
   if(j.ok && j.user){
     $('#who').textContent = j.user.username;
     PERM.role = j.user.role || 'viewer';
+    PERM.userId = j.user.id != null ? Number(j.user.id) : null;
+    PERM.username = j.user.username || '';
     const sel = $('#roleSelect');
     sel.value = PERM.role;
     sel.disabled = true;

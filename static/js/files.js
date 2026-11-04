@@ -36,6 +36,14 @@ function renderFileViewCrumbs(folderId, folderName){
   });
 }
 
+function statusTagClass(status){
+  if(status === '已借出') return 'tag state out';
+  if(status === '已验收') return 'tag state ok';
+  if(status === '待验收') return 'tag state pending';
+  if(status === '已拒绝') return 'tag state out';
+  return 'tag state';
+}
+
 function appendFileRows(container, files, { interactive = true } = {}){
   if(!container) return;
   container.innerHTML = '';
@@ -54,9 +62,11 @@ function appendFileRows(container, files, { interactive = true } = {}){
     row.dataset.file = f.title || f.name;
     row.dataset.fileId = f.id;
     row.dataset.checkedOut = checked ? 'true' : 'false';
+    row.dataset.canCheckout = f.can_checkout ? 'true' : 'false';
+    row.dataset.canCheckin = f.can_checkin ? 'true' : 'false';
     const owner = f.checked_out_by_name || '—';
     const ver = f.latest_version || '—';
-    const tagClass = f.status === '已借出' ? 'tag state out' : (f.status === '已验收' ? 'tag state ok' : 'tag state');
+    const tagClass = statusTagClass(f.status);
     const displayName = f.title || f.name;
     row.innerHTML = `
       <span class="idx">${idx + 1}.</span>
@@ -144,34 +154,44 @@ async function loadFolderFilePreview(){
 function openFileMenu(e, row){
   e.preventDefault();
   const items = [];
-  if(canEdit()){
-    items.push({
-      text: row.dataset.checkedOut === 'true' ? 'Check in' : 'Check out',
-      action: () => toggleCheckout(row),
-    });
+  if(row.dataset.canCheckin === 'true'){
+    items.push({ text: 'Check in', action: () => openCheckinDialog(Number(row.dataset.fileId)) });
+  } else if(row.dataset.canCheckout === 'true'){
+    items.push({ text: 'Check out', action: () => doCheckout(row) });
   }
   items.push({ text: '历史版本', action: () => openVersionsFromRow(row) });
   items.push({ text: '文档追溯', action: () => openTrace(Number(row.dataset.fileId), row.dataset.file) });
   openContextMenu(e, items);
 }
 
-async function toggleCheckout(row){
+async function doCheckout(row){
   const fid = Number(row.dataset.fileId);
-  const checked = row.dataset.checkedOut === 'true';
-  if(checked){
-    openCheckinDialog(fid);
-    return;
-  }
   try{
     await api('/api/files/checkout', {
       method: 'POST',
       body: JSON.stringify({ file_id: fid }),
     });
-    toast('已 Check out');
-    await openFiles(STATE.groupId, STATE.group);
-    await loadFolderFilePreview();
+    toast('已 Check out，可编辑后 Check in 提交新版本');
+    await refreshFileLists();
   }catch(err){
     toast(err.message);
+  }
+}
+
+async function refreshFileLists(){
+  if(STATE.view === 'files' && STATE.groupId){
+    await openFiles(STATE.groupId, STATE.group, { silent: true });
+  }
+  await loadFolderFilePreview();
+}
+
+async function toggleCheckout(row){
+  if(row.dataset.canCheckin === 'true'){
+    openCheckinDialog(Number(row.dataset.fileId));
+    return;
+  }
+  if(row.dataset.canCheckout === 'true'){
+    await doCheckout(row);
   }
 }
 
@@ -272,8 +292,7 @@ checkinForm?.addEventListener('submit', async (e) => {
     await apiForm('/api/files/checkin', fd);
     checkinDialog.classList.remove('open');
     toast('已 Check in，进入待验收');
-    await openFiles(STATE.groupId, STATE.group);
-    await loadFolderFilePreview();
+    await refreshFileLists();
     loadAcceptance();
   }catch(err){
     toast(err.message);

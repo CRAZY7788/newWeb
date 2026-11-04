@@ -48,6 +48,13 @@ EXT_TO_MIME = {
     ".zip": "application/zip",
 }
 ALLOWED_UPLOAD_EXTENSIONS = frozenset(EXT_TO_FILE_TYPE.keys())
+FILE_STATUS_DRAFT = "草稿"
+FILE_STATUS_CHECKED_OUT = "已借出"
+FILE_STATUS_PENDING = "待验收"
+FILE_STATUS_ACCEPTED = "已验收"
+FILE_STATUS_REJECTED = "已拒绝"
+EDIT_ROLES = frozenset(("editor", "approver", "admin"))
+APPROVE_ROLES = frozenset(("approver", "admin"))
 FILE_TYPE_LABELS = {
     "word": "Word",
     "excel": "Excel",
@@ -234,6 +241,33 @@ def folder_file_name_taken(folder_id, name, exclude_file_id=None):
     return q.first() is not None
 
 
+def checkout_error(file_obj):
+    if file_obj.checked_out_by:
+        return "文件已被借出"
+    if file_obj.status == FILE_STATUS_PENDING:
+        return "文档待验收中，请等待验收完成或拒绝后再编辑"
+    return None
+
+
+def checkin_error(file_obj, user):
+    if not file_obj.checked_out_by:
+        return "请先 Check out 再归还"
+    if file_obj.checked_out_by != user.id and user.role != "admin":
+        return "只能由借出人或管理员归还"
+    return None
+
+
+def file_perm_flags(file_obj, user):
+    flags = {"can_checkout": False, "can_checkin": False}
+    if not user or user.role not in EDIT_ROLES:
+        return flags
+    if file_obj.checked_out_by:
+        flags["can_checkin"] = file_obj.checked_out_by == user.id or user.role == "admin"
+    elif not checkout_error(file_obj):
+        flags["can_checkout"] = True
+    return flags
+
+
 def log_audit(user, action, target_type, target_id, target_name, detail=""):
     db.session.add(AuditLog(
         user=user,
@@ -326,13 +360,13 @@ def file_owner_name(file_obj):
     return u.username if u else None
 
 
-def serialize_file(f):
+def serialize_file(f, user=None):
     latest = (
         FileVersion.query.filter_by(file_id=f.id)
         .order_by(FileVersion.date.desc())
         .first()
     )
-    return {
+    payload = {
         "id": f.id,
         "name": f.name,
         "title": f.title or f.name,
@@ -347,6 +381,8 @@ def serialize_file(f):
         "latest_version": latest.label if latest else None,
         "doc_code": f.doc_code,
     }
+    payload.update(file_perm_flags(f, user))
+    return payload
 
 
 def next_version_label(file_id):
@@ -674,7 +710,14 @@ def api_me():
         return jsonify({"ok": False, "user": None})
     u = current_user()
     role = u.role if u else session.get("role", "viewer")
-    return jsonify({"ok": True, "user": {"username": session["username"], "role": role}})
+    return jsonify({
+        "ok": True,
+        "user": {
+            "id": u.id if u else None,
+            "username": session["username"],
+            "role": role,
+        },
+    })
 
 
 @app.get("/api/projects")
@@ -837,13 +880,14 @@ def api_files():
     folder_id = request.args.get("folder_id", type=int)
     gid = request.args.get("group_id", type=int)
     fid = folder_id or gid
+    user = current_user()
     q = File.query
     if fid:
         folder = db.session.get(Folder, fid)
         if not folder:
             return jsonify({"ok": False, "error": "文件夹不存在"}), 404
         q = q.filter_by(folder_id=fid)
-    return jsonify({"ok": True, "files": [serialize_file(f) for f in q.order_by(File.id.asc()).all()]})
+    return jsonify({"ok": True, "files": [serialize_file(f, user) for f in q.order_by(File.id.asc()).all()]})
 
 
 @app.post("/api/files/checkout")
@@ -855,14 +899,15 @@ def api_checkout():
     f = db.session.get(File, fid)
     if not f:
         return jsonify({"ok": False, "error": "文件不存在"}), 404
-    if f.checked_out_by:
-        return jsonify({"ok": False, "error": "文件已被借出"}), 400
+    err = checkout_error(f)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
     f.checked_out_by = user.id
     f.checked_out_at = dt.datetime.utcnow()
-    f.status = "已借出"
+    f.status = FILE_STATUS_CHECKED_OUT
     log_audit(user.username, "checkout", "file", f.id, f.name, "")
     db.session.commit()
-    return jsonify({"ok": True, "file": serialize_file(f)})
+    return jsonify({"ok": True, "file": serialize_file(f, user)})
 
 
 @app.post("/api/files/upload")
@@ -915,7 +960,7 @@ def api_upload():
     f.current_version_id = v.id
     log_audit(user.username, "upload", "file", f.id, f.name, fname)
     db.session.commit()
-    return jsonify({"ok": True, "file": serialize_file(f)})
+    return jsonify({"ok": True, "file": serialize_file(f, user)})
 
 
 @app.post("/api/files/create")
@@ -968,7 +1013,7 @@ def api_files_create():
     f.current_version_id = v.id
     log_audit(user.username, "create", "file", f.id, f.name, kind)
     db.session.commit()
-    return jsonify({"ok": True, "file": serialize_file(f)})
+    return jsonify({"ok": True, "file": serialize_file(f, user)})
 
 
 @app.post("/api/files/checkin")
@@ -980,32 +1025,33 @@ def api_checkin():
         comment = request.form.get("comment") or "Check in"
         label = request.form.get("label")
         storage = request.files.get("file")
-        if not storage or not storage.filename:
-            return jsonify({"ok": False, "error": "请上传新版本文件"}), 400
     else:
         data = request.get_json() or {}
         fid = data.get("file_id")
         comment = data.get("comment") or "Check in"
         label = data.get("label")
-        storage = None
+        storage = request.files.get("file") if hasattr(request, "files") else None
+    if not fid:
+        return jsonify({"ok": False, "error": "缺少文档"}), 400
+    if not storage or not getattr(storage, "filename", None):
+        return jsonify({"ok": False, "error": "请上传新版本文件"}), 400
     user = current_user()
     f = db.session.get(File, fid)
     if not f:
         return jsonify({"ok": False, "error": "文件不存在"}), 404
-    if f.checked_out_by and f.checked_out_by != user.id and user.role != "admin":
-        return jsonify({"ok": False, "error": "只能由借出人或管理员归还"}), 403
+    err = checkin_error(f, user)
+    if err:
+        status = 403 if "管理员" in err or "借出人" in err else 400
+        return jsonify({"ok": False, "error": err}), status
+    ok, err = validate_upload_filename(storage.filename)
+    if not ok:
+        return jsonify({"ok": False, "error": err}), 400
 
     parent_id = f.current_version_id
-    if storage and storage.filename:
-        ok, err = validate_upload_filename(storage.filename)
-        if not ok:
-            return jsonify({"ok": False, "error": err}), 400
-        rel, fname, size, sha = save_upload(storage, f.id)
-        ftype, mime = infer_file_type(fname)
-        f.file_type = ftype
-        f.mime = mime
-    else:
-        rel, fname, size, sha = DEFAULT_VERSION_FILE, "history.pdf", 0, None
+    rel, fname, size, sha = save_upload(storage, f.id)
+    ftype, mime = infer_file_type(fname)
+    f.file_type = ftype
+    f.mime = mime
     v = FileVersion(
         file=f,
         label=label or next_version_label(f.id),
@@ -1022,13 +1068,13 @@ def api_checkin():
     f.current_version_id = v.id
     f.checked_out_by = None
     f.checked_out_at = None
-    f.status = "待验收"
-    existing = AcceptanceTask.query.filter_by(file_id=f.id, status="待验收").first()
+    f.status = FILE_STATUS_PENDING
+    existing = AcceptanceTask.query.filter_by(file_id=f.id, status=FILE_STATUS_PENDING).first()
     if not existing:
-        db.session.add(AcceptanceTask(file=f, owner=user.username, status="待验收"))
+        db.session.add(AcceptanceTask(file=f, owner=user.username, status=FILE_STATUS_PENDING))
     log_audit(user.username, "checkin", "file", f.id, f.name, v.label)
     db.session.commit()
-    return jsonify({"ok": True, "file": serialize_file(f)})
+    return jsonify({"ok": True, "file": serialize_file(f, user)})
 
 
 @app.get("/api/files/trace")
@@ -1051,7 +1097,7 @@ def api_trace():
     )
     return jsonify({
         "ok": True,
-        "file": serialize_file(f),
+        "file": serialize_file(f, current_user()),
         "versions": [
             {
                 "id": v.id,
@@ -1081,7 +1127,11 @@ def api_trace():
 @login_required
 def api_versions():
     fid = request.args.get("file_id", type=int)
+    f = db.session.get(File, fid)
+    if not f:
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
     q = FileVersion.query.filter_by(file_id=fid).order_by(FileVersion.date.desc())
+    current_id = f.current_version_id
     return jsonify({"ok": True, "versions": [
         {
             "id": v.id,
@@ -1090,6 +1140,7 @@ def api_versions():
             "author": v.author,
             "rel_path": v.rel_path,
             "comment": v.comment,
+            "is_current": v.id == current_id,
         }
         for v in q.all()
     ]})
@@ -1142,8 +1193,12 @@ def api_accept_approve():
     t = db.session.get(AcceptanceTask, tid)
     if not t:
         return jsonify({"ok": False, "error": "任务不存在"}), 404
-    t.status = "已验收"
-    t.file.status = "已验收"
+    if t.status != FILE_STATUS_PENDING:
+        return jsonify({"ok": False, "error": "该任务已处理"}), 400
+    if t.file.status != FILE_STATUS_PENDING:
+        return jsonify({"ok": False, "error": "文档状态不是待验收"}), 400
+    t.status = FILE_STATUS_ACCEPTED
+    t.file.status = FILE_STATUS_ACCEPTED
     detail = data.get("role") or data.get("comment") or f"task={tid}"
     log_audit(user.username, "accept", "file", t.file_id, t.file.name, detail)
     db.session.commit()
@@ -1160,8 +1215,12 @@ def api_accept_reject():
     t = db.session.get(AcceptanceTask, tid)
     if not t:
         return jsonify({"ok": False, "error": "任务不存在"}), 404
-    t.status = "已拒绝"
-    t.file.status = "已拒绝"
+    if t.status != FILE_STATUS_PENDING:
+        return jsonify({"ok": False, "error": "该任务已处理"}), 400
+    if t.file.status != FILE_STATUS_PENDING:
+        return jsonify({"ok": False, "error": "文档状态不是待验收"}), 400
+    t.status = FILE_STATUS_REJECTED
+    t.file.status = FILE_STATUS_REJECTED
     log_audit(user.username, "reject", "file", t.file_id, t.file.name, reason)
     db.session.commit()
     return jsonify({"ok": True})
