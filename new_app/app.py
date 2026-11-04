@@ -3,6 +3,7 @@ import os
 import hashlib
 import datetime as dt
 import zipfile
+import shutil
 from functools import wraps
 from io import BytesIO
 
@@ -53,6 +54,7 @@ FILE_STATUS_CHECKED_OUT = "已借出"
 FILE_STATUS_PENDING = "待验收"
 FILE_STATUS_ACCEPTED = "已验收"
 FILE_STATUS_REJECTED = "已拒绝"
+FILE_STATUS_VOID = "已作废"
 EDIT_ROLES = frozenset(("editor", "approver", "admin"))
 APPROVE_ROLES = frozenset(("approver", "admin"))
 FILE_TYPE_LABELS = {
@@ -242,11 +244,60 @@ def folder_file_name_taken(folder_id, name, exclude_file_id=None):
 
 
 def checkout_error(file_obj):
+    if file_obj.status == FILE_STATUS_VOID:
+        return "文档已作废"
     if file_obj.checked_out_by:
         return "文件已被借出"
     if file_obj.status == FILE_STATUS_PENDING:
         return "文档待验收中，请等待验收完成或拒绝后再编辑"
     return None
+
+
+def file_metadata_error(file_obj):
+    """重命名 / 移动前：不可处于借出或待验收或已作废。"""
+    if file_obj.status == FILE_STATUS_VOID:
+        return "文档已作废"
+    if file_obj.checked_out_by:
+        return "文档已借出，请先 Check in"
+    if file_obj.status == FILE_STATUS_PENDING:
+        return "文档待验收中，请先完成验收流程"
+    return None
+
+
+def void_error(file_obj):
+    if file_obj.status == FILE_STATUS_VOID:
+        return "文档已是作废状态"
+    if file_obj.checked_out_by:
+        return "文档已借出，无法作废"
+    return None
+
+
+def delete_error(file_obj):
+    if file_obj.checked_out_by:
+        return "文档已借出，无法删除"
+    if file_obj.status == FILE_STATUS_PENDING:
+        return "文档待验收中，请先验收、拒绝或作废"
+    return None
+
+
+def normalize_rename_filename(name, file_obj):
+    raw = (name or "").strip()
+    if not raw:
+        return None, "名称不能为空"
+    if len(raw) > 120:
+        return None, "文档名称过长（最多 120 个字符）"
+    old_ext = os.path.splitext(file_obj.name or "")[1]
+    base, cur_ext = os.path.splitext(raw)
+    if old_ext:
+        if not cur_ext:
+            raw = raw + old_ext
+        elif cur_ext.lower() != old_ext.lower():
+            raw = base + old_ext
+    return raw, None
+
+
+def folder_display_path(folder):
+    return " / ".join(f.name for f in folder_ancestors(folder))
 
 
 def checkin_error(file_obj, user):
@@ -258,13 +309,28 @@ def checkin_error(file_obj, user):
 
 
 def file_perm_flags(file_obj, user):
-    flags = {"can_checkout": False, "can_checkin": False}
-    if not user or user.role not in EDIT_ROLES:
+    flags = {
+        "can_checkout": False,
+        "can_checkin": False,
+        "can_rename": False,
+        "can_move": False,
+        "can_void": False,
+        "can_delete": False,
+    }
+    if not user:
         return flags
-    if file_obj.checked_out_by:
-        flags["can_checkin"] = file_obj.checked_out_by == user.id or user.role == "admin"
-    elif not checkout_error(file_obj):
-        flags["can_checkout"] = True
+    if user.role in EDIT_ROLES:
+        if file_obj.checked_out_by:
+            flags["can_checkin"] = file_obj.checked_out_by == user.id or user.role == "admin"
+        elif not checkout_error(file_obj):
+            flags["can_checkout"] = True
+        if not file_metadata_error(file_obj):
+            flags["can_rename"] = True
+            flags["can_move"] = True
+    if user.role in APPROVE_ROLES and not void_error(file_obj):
+        flags["can_void"] = True
+    if user.role == "admin" and not delete_error(file_obj):
+        flags["can_delete"] = True
     return flags
 
 
@@ -339,7 +405,10 @@ def migrate_groups_to_folders():
 
 
 def region_stats(region):
-    files = File.query.join(Folder).filter(Folder.region_id == region.id).all()
+    files = [
+        f for f in File.query.join(Folder).filter(Folder.region_id == region.id).all()
+        if f.status != FILE_STATUS_VOID
+    ]
     if not files:
         return {"progress": 0, "status": "Todo", "file_count": 0}
     accepted = sum(1 for f in files if f.status == "已验收")
@@ -515,7 +584,10 @@ def template_bytes_for_kind(kind, comment=""):
 
 
 def serialize_folder(folder):
-    files = File.query.filter_by(folder_id=folder.id).all()
+    files = [
+        f for f in File.query.filter_by(folder_id=folder.id).all()
+        if f.status != FILE_STATUS_VOID
+    ]
     child_count = Folder.query.filter_by(parent_id=folder.id).count()
     return {
         "id": folder.id,
@@ -552,7 +624,10 @@ def folder_name_taken(name, region_id, parent_id):
 
 
 def folder_is_empty(folder_id):
-    if File.query.filter_by(folder_id=folder_id).count():
+    active_files = File.query.filter_by(folder_id=folder_id).filter(
+        File.status != FILE_STATUS_VOID
+    ).count()
+    if active_files:
         return False
     if Folder.query.filter_by(parent_id=folder_id).count():
         return False
@@ -786,6 +861,25 @@ def api_folders():
     return jsonify({"ok": True, "folders": folders})
 
 
+@app.get("/api/folders/choices")
+@login_required
+def api_folders_choices():
+    rid = request.args.get("region_id", type=int)
+    if not rid:
+        return jsonify({"ok": False, "error": "缺少地区"}), 400
+    folders = Folder.query.filter_by(region_id=rid).order_by(Folder.id.asc()).all()
+    choices = [
+        {
+            "id": f.id,
+            "path": folder_display_path(f),
+            "depth": folder_level(f),
+            "parent_id": f.parent_id,
+        }
+        for f in folders
+    ]
+    return jsonify({"ok": True, "folders": choices})
+
+
 @app.get("/api/folders/<int:folder_id>")
 @login_required
 def api_folder_detail(folder_id):
@@ -886,8 +980,116 @@ def api_files():
         folder = db.session.get(Folder, fid)
         if not folder:
             return jsonify({"ok": False, "error": "文件夹不存在"}), 404
-        q = q.filter_by(folder_id=fid)
+        q = q.filter_by(folder_id=fid).filter(File.status != FILE_STATUS_VOID)
+    else:
+        q = q.filter(File.status != FILE_STATUS_VOID)
     return jsonify({"ok": True, "files": [serialize_file(f, user) for f in q.order_by(File.id.asc()).all()]})
+
+
+@app.patch("/api/files/<int:file_id>")
+@role_required("editor", "approver", "admin")
+def api_files_patch(file_id):
+    f = db.session.get(File, file_id)
+    if not f:
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    err = file_metadata_error(f)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    data = request.get_json() or {}
+    if not data:
+        return jsonify({"ok": False, "error": "无修改内容"}), 400
+    user = current_user()
+    changed = False
+
+    if "name" in data:
+        new_name, nerr = normalize_rename_filename(data.get("name"), f)
+        if new_name is None:
+            return jsonify({"ok": False, "error": nerr}), 400
+        if new_name != f.name:
+            if folder_file_name_taken(f.folder_id, new_name, exclude_file_id=f.id):
+                return jsonify({"ok": False, "error": "当前文件夹下已有同名文档"}), 400
+            old = f.name
+            f.name = new_name
+            f.title = new_name
+            log_audit(user.username, "rename", "file", f.id, f.name, old)
+            changed = True
+
+    if "folder_id" in data:
+        target_id = data.get("folder_id")
+        if target_id is None:
+            return jsonify({"ok": False, "error": "目标文件夹无效"}), 400
+        target_id = int(target_id)
+        if target_id != f.folder_id:
+            target = db.session.get(Folder, target_id)
+            if not target:
+                return jsonify({"ok": False, "error": "目标文件夹不存在"}), 404
+            src_folder = f.folder
+            if not src_folder or target.region_id != src_folder.region_id:
+                return jsonify({"ok": False, "error": "不能移动到其他地区"}), 400
+            if folder_file_name_taken(target_id, f.name, exclude_file_id=f.id):
+                return jsonify({"ok": False, "error": "目标文件夹下已有同名文档"}), 400
+            old_path = folder_display_path(src_folder) if src_folder else str(f.folder_id)
+            f.folder_id = target_id
+            f.group_id = target_id
+            log_audit(
+                user.username,
+                "move",
+                "file",
+                f.id,
+                f.name,
+                f"{old_path} -> {folder_display_path(target)}",
+            )
+            changed = True
+
+    if not changed:
+        return jsonify({"ok": False, "error": "无有效修改"}), 400
+    db.session.commit()
+    return jsonify({"ok": True, "file": serialize_file(f, user)})
+
+
+@app.post("/api/files/<int:file_id>/void")
+@role_required("approver", "admin")
+def api_files_void(file_id):
+    f = db.session.get(File, file_id)
+    if not f:
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    err = void_error(f)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    user = current_user()
+    AcceptanceTask.query.filter_by(file_id=f.id, status=FILE_STATUS_PENDING).delete()
+    f.checked_out_by = None
+    f.checked_out_at = None
+    f.status = FILE_STATUS_VOID
+    log_audit(user.username, "void", "file", f.id, f.name, "")
+    db.session.commit()
+    return jsonify({"ok": True})
+
+
+def _remove_file_upload_dir(file_id):
+    path = os.path.join(UPLOAD_ROOT, str(file_id))
+    if os.path.isdir(path):
+        shutil.rmtree(path, ignore_errors=True)
+
+
+@app.delete("/api/files/<int:file_id>")
+@role_required("admin")
+def api_files_delete(file_id):
+    f = db.session.get(File, file_id)
+    if not f:
+        return jsonify({"ok": False, "error": "文件不存在"}), 404
+    err = delete_error(f)
+    if err:
+        return jsonify({"ok": False, "error": err}), 400
+    user = current_user()
+    name = f.name
+    AcceptanceTask.query.filter_by(file_id=f.id).delete()
+    FileVersion.query.filter_by(file_id=f.id).delete()
+    log_audit(user.username, "delete", "file", file_id, name, "")
+    db.session.delete(f)
+    db.session.commit()
+    _remove_file_upload_dir(file_id)
+    return jsonify({"ok": True})
 
 
 @app.post("/api/files/checkout")

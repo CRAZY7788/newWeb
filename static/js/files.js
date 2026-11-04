@@ -41,6 +41,7 @@ function statusTagClass(status){
   if(status === '已验收') return 'tag state ok';
   if(status === '待验收') return 'tag state pending';
   if(status === '已拒绝') return 'tag state out';
+  if(status === '已作废') return 'tag state out';
   return 'tag state';
 }
 
@@ -64,6 +65,10 @@ function appendFileRows(container, files, { interactive = true } = {}){
     row.dataset.checkedOut = checked ? 'true' : 'false';
     row.dataset.canCheckout = f.can_checkout ? 'true' : 'false';
     row.dataset.canCheckin = f.can_checkin ? 'true' : 'false';
+    row.dataset.canRename = f.can_rename ? 'true' : 'false';
+    row.dataset.canMove = f.can_move ? 'true' : 'false';
+    row.dataset.canVoid = f.can_void ? 'true' : 'false';
+    row.dataset.canDelete = f.can_delete ? 'true' : 'false';
     const owner = f.checked_out_by_name || '—';
     const ver = f.latest_version || '—';
     const tagClass = statusTagClass(f.status);
@@ -140,7 +145,7 @@ async function loadFolderFilePreview(){
   if(createBtn) createBtn.style.display = canEdit() ? '' : 'none';
   if(manageBtn) manageBtn.style.display = '';
   const json = await api('/api/files?folder_id=' + STATE.currentFolderId);
-  appendFileRows(list, json.files, { interactive: false });
+  appendFileRows(list, json.files, { interactive: true });
   if(manageBtn){
     manageBtn.onclick = () => {
       const name = STATE.folderStack.length
@@ -158,6 +163,18 @@ function openFileMenu(e, row){
     items.push({ text: 'Check in', action: () => openCheckinDialog(Number(row.dataset.fileId)) });
   } else if(row.dataset.canCheckout === 'true'){
     items.push({ text: 'Check out', action: () => doCheckout(row) });
+  }
+  if(row.dataset.canRename === 'true'){
+    items.push({ text: '重命名', action: () => openRenameDialog(row) });
+  }
+  if(row.dataset.canMove === 'true'){
+    items.push({ text: '移动到…', action: () => openMoveDialog(row) });
+  }
+  if(row.dataset.canVoid === 'true'){
+    items.push({ text: '作废', action: () => confirmVoid(row) });
+  }
+  if(row.dataset.canDelete === 'true'){
+    items.push({ text: '永久删除', action: () => confirmDelete(row) });
   }
   items.push({ text: '历史版本', action: () => openVersionsFromRow(row) });
   items.push({ text: '文档追溯', action: () => openTrace(Number(row.dataset.fileId), row.dataset.file) });
@@ -327,3 +344,116 @@ async function openTrace(fileId, fileName){
   });
   show('trace');
 }
+
+const renameDialog = $('#renameDialog');
+const renameForm = $('#renameForm');
+const moveDialog = $('#moveDialog');
+const moveForm = $('#moveForm');
+const moveFolderSelect = $('#moveFolderSelect');
+
+function openRenameDialog(row){
+  renameForm.reset();
+  renameForm.file_id.value = row.dataset.fileId;
+  renameForm.name.value = row.dataset.file || '';
+  renameDialog.classList.add('open');
+}
+
+async function openMoveDialog(row){
+  if(!STATE.regionId){
+    toast('请先进入项目地区');
+    return;
+  }
+  moveForm.reset();
+  moveForm.file_id.value = row.dataset.fileId;
+  moveFolderSelect.innerHTML = '<option value="">加载中…</option>';
+  moveDialog.classList.add('open');
+  try{
+    const json = await api('/api/folders/choices?region_id=' + STATE.regionId);
+    const currentFolder = STATE.groupId || STATE.currentFolderId;
+    moveFolderSelect.innerHTML = '';
+    json.folders.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f.id;
+      opt.textContent = f.path + (f.id === currentFolder ? '（当前）' : '');
+      moveFolderSelect.appendChild(opt);
+    });
+    if(!json.folders.length){
+      moveFolderSelect.innerHTML = '<option value="">无可用文件夹</option>';
+    }
+  }catch(err){
+    toast(err.message);
+    moveDialog.classList.remove('open');
+  }
+}
+
+async function confirmVoid(row){
+  const name = row.dataset.file;
+  if(!confirm(`确定作废「${name}」？作废后将从列表隐藏，追溯记录保留。`)) return;
+  try{
+    await api('/api/files/' + row.dataset.fileId + '/void', { method: 'POST', body: '{}' });
+    toast('已作废');
+    await refreshFileLists();
+    loadAcceptance();
+    if(typeof loadBoard === 'function' && STATE.projectId){
+      try{ await loadBoard(STATE.projectId); }catch(_e){}
+    }
+  }catch(err){
+    toast(err.message);
+  }
+}
+
+async function confirmDelete(row){
+  const name = row.dataset.file;
+  if(!confirm(`永久删除「${name}」？此操作不可恢复。`)) return;
+  try{
+    await api('/api/files/' + row.dataset.fileId, { method: 'DELETE' });
+    toast('已删除');
+    await refreshFileLists();
+    if(typeof loadBoard === 'function' && STATE.projectId){
+      try{ await loadBoard(STATE.projectId); }catch(_e){}
+    }
+  }catch(err){
+    toast(err.message);
+  }
+}
+
+$('#cancelRename')?.addEventListener('click', () => renameDialog.classList.remove('open'));
+renameDialog?.addEventListener('click', (e) => { if(e.target === renameDialog) renameDialog.classList.remove('open'); });
+renameForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(renameForm);
+  const fileId = fd.get('file_id');
+  const name = (fd.get('name') || '').trim();
+  try{
+    await api('/api/files/' + fileId, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+    renameDialog.classList.remove('open');
+    toast('已重命名');
+    await refreshFileLists();
+  }catch(err){
+    toast(err.message);
+  }
+});
+
+$('#cancelMove')?.addEventListener('click', () => moveDialog.classList.remove('open'));
+moveDialog?.addEventListener('click', (e) => { if(e.target === moveDialog) moveDialog.classList.remove('open'); });
+moveForm?.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const fd = new FormData(moveForm);
+  const fileId = fd.get('file_id');
+  const folderId = Number(fd.get('folder_id'));
+  if(!folderId){ toast('请选择目标文件夹'); return; }
+  try{
+    await api('/api/files/' + fileId, {
+      method: 'PATCH',
+      body: JSON.stringify({ folder_id: folderId }),
+    });
+    moveDialog.classList.remove('open');
+    toast('已移动');
+    await refreshFileLists();
+  }catch(err){
+    toast(err.message);
+  }
+});
