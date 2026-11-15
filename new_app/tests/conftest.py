@@ -66,8 +66,14 @@ def login(client, app_ctx):
 
 @pytest.fixture
 def any_folder(app_ctx):
-    folder = Folder.query.first()
-    assert folder is not None, "no folder in seed data"
+    from app import Project, Region, PROJECT_KIND_PRODUCT
+    folder = (
+        Folder.query.join(Region, Folder.region_id == Region.id)
+        .join(Project, Region.project_id == Project.id)
+        .filter(Project.kind == PROJECT_KIND_PRODUCT)
+        .first()
+    )
+    assert folder is not None, "no product folder in seed data"
     return folder
 
 

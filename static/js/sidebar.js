@@ -7,7 +7,7 @@ toggleSidebar.addEventListener('click', ()=> sidebar.classList.contains('open') 
 overlay.addEventListener('click', closeSidebar);
 
 async function loadProjects(){
-  const json = await api('/api/projects');
+  const json = await api('/api/projects?kind=product');
   STATE.projectList = json.projects;
   const nav = $('#projectNav');
   nav.innerHTML = '';
@@ -34,6 +34,7 @@ $('.sidebar').addEventListener('click', async e=>{
   const type=item.dataset.type;
   try{
     if(type==='project'){
+      STATE.library = 'product';
       STATE.project = item.dataset.project;
       STATE.projectId = Number(item.dataset.projectId);
       STATE.regionId = null;
@@ -43,6 +44,7 @@ $('.sidebar').addEventListener('click', async e=>{
       STATE.fileId = null;
       resetFolderNav();
       syncProjectLabels();
+      syncLibraryChrome();
       await loadBoard(STATE.projectId);
       show('board');
       closeSidebar();
@@ -51,7 +53,7 @@ $('.sidebar').addEventListener('click', async e=>{
       show('inbox');
       closeSidebar();
     }else if(type==='qms'){
-      show('qms');
+      await openQmsLibrary();
       closeSidebar();
     }else if(type==='templates'){
       await loadTemplateCatalog();

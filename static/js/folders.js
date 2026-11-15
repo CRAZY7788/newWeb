@@ -26,8 +26,8 @@ function renderFolderBreadcrumbs(){
     }
     parts.push(span);
   };
-  addCrumb(STATE.project || '项目', () => navigateFolderRoot());
-  addCrumb(STATE.regionLabel || STATE.region || '地区', () => navigateFolderRoot());
+  addCrumb(STATE.library === 'qms' ? (STATE.project || 'QMS') : (STATE.project || '项目'), () => navigateFolderRoot());
+  addCrumb(STATE.regionLabel || STATE.region || (STATE.library === 'qms' ? '公司级' : '地区'), () => navigateFolderRoot());
   STATE.folderStack.forEach((f, idx) => {
     const slash = document.createElement('span');
     slash.className = 'slash';
@@ -157,6 +157,42 @@ folderForm?.addEventListener('submit', async (e) => {
     toast(err.message);
   }
 });
+
+function syncLibraryChrome(){
+  const back = $('#detailBackBtn');
+  if(back){
+    if(STATE.library === 'qms'){
+      back.textContent = '← QMS 根目录';
+      back.dataset.back = 'qms-root';
+    } else {
+      back.textContent = '← 返回看板';
+      back.dataset.back = 'board';
+    }
+  }
+}
+
+async function openQmsLibrary(opts = {}){
+  const json = await api('/api/qms');
+  STATE.library = 'qms';
+  STATE.projectId = json.project.id;
+  STATE.project = json.project.name;
+  STATE.regionId = json.region.id;
+  STATE.region = json.region.name;
+  STATE.regionLabel = json.region.label;
+  STATE.group = null;
+  STATE.groupId = null;
+  STATE.file = null;
+  STATE.fileId = null;
+  if(!opts.keepFolder){
+    resetFolderNav();
+  }
+  syncProjectLabels();
+  syncLibraryChrome();
+  await populateDetail(STATE.regionId, STATE.region, STATE.regionLabel);
+  if(!opts.silent){
+    show('detail');
+  }
+}
 
 $('#folderUpBtn')?.addEventListener('click', async () => {
   if(STATE.folderStack.length === 0) return;

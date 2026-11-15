@@ -1,6 +1,7 @@
 function syncHash(){
   const p=new URLSearchParams();
   p.set('view', STATE.view);
+  if(STATE.library) p.set('lib', STATE.library);
   if(STATE.project) p.set('project', STATE.project);
   if(STATE.projectId) p.set('pid', STATE.projectId);
   if(STATE.region) p.set('region', STATE.region);
@@ -16,6 +17,7 @@ function syncHash(){
 function parseHash(){
   const p = new URLSearchParams(location.hash.replace(/^#/,''));
   STATE.view = p.get('view') || STATE.view;
+  STATE.library = p.get('lib') || STATE.library || 'product';
   STATE.project = p.get('project') || STATE.project;
   STATE.projectId = p.get('pid') ? Number(p.get('pid')) : STATE.projectId;
   STATE.region = p.get('region') || STATE.region;
@@ -44,9 +46,10 @@ function resolveProject(){
 
 async function routeToState(){
   $$('.sidebar .nav-item').forEach(n=>n.classList.remove('active'));
+  const inQms = STATE.library === 'qms' || STATE.view === 'qms';
   if(STATE.view==='inbox'){
     $('.sidebar .nav-item[data-type="inbox"]')?.classList.add('active');
-  } else if(STATE.view==='qms'){
+  } else if(inQms){
     $('.sidebar .nav-item[data-type="qms"]')?.classList.add('active');
   } else if(STATE.view==='templates'){
     $('.sidebar .nav-item[data-type="templates"]')?.classList.add('active');
@@ -54,17 +57,35 @@ async function routeToState(){
     $(`.sidebar .nav-item[data-type="project"][data-project-id="${STATE.projectId}"]`)?.classList.add('active');
   }
   syncProjectLabels();
+  syncLibraryChrome();
 
   try{
     if(STATE.view==='inbox'){
       show('inbox');
-    } else if(STATE.view==='qms'){
-      show('qms');
     } else if(STATE.view==='templates'){
       await loadTemplateCatalog();
       show('templates');
+    } else if(STATE.view==='qms' || (inQms && ['qms','detail','files','versions','trace'].includes(STATE.view))){
+      await openQmsLibrary({
+        silent: STATE.view !== 'qms' && STATE.view !== 'detail',
+        keepFolder: true,
+      });
+      if(STATE.view==='files' && STATE.groupId){
+        await openFiles(STATE.groupId, STATE.group);
+      } else if(STATE.view==='versions' && STATE.fileId){
+        if(STATE.groupId) await openFiles(STATE.groupId, STATE.group, {silent:true});
+        $('#verFile').textContent = STATE.file || '';
+        await populateVersions(STATE.fileId, STATE.file);
+        show('versions');
+      } else if(STATE.view==='trace' && STATE.fileId){
+        if(STATE.groupId) await openFiles(STATE.groupId, STATE.group, {silent:true});
+        await openTrace(STATE.fileId, STATE.file);
+      } else {
+        show('detail');
+      }
     } else {
       resolveProject();
+      STATE.library = 'product';
       await loadBoard(STATE.projectId);
       if(STATE.view==='board'){
         show('board');

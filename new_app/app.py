@@ -70,7 +70,14 @@ REGION_LABELS = {
     "EU": "EU · MDR",
     "FDA": "US · FDA",
     "UK": "UK · MHRA",
+    "Company": "公司级",
 }
+
+PROJECT_KIND_PRODUCT = "product"
+PROJECT_KIND_QMS = "qms"
+QMS_PROJECT_NAME = "质量体系"
+QMS_REGION_NAME = "Company"
+QMS_ROOT_FOLDERS = ("程序文件", "记录", "CAPA", "培训")
 
 AUDIT_ACTION_LABELS = {
     "upload": "上传",
@@ -121,6 +128,7 @@ class User(db.Model):
 class Project(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(120), unique=True, nullable=False)
+    kind = db.Column(db.String(20), default=PROJECT_KIND_PRODUCT, nullable=False)
 
 
 class Region(db.Model):
@@ -320,15 +328,25 @@ def audit_action_label(action):
     return AUDIT_ACTION_LABELS.get(action or "", action or "—")
 
 
+def serialize_project(project):
+    return {
+        "id": project.id,
+        "name": project.name,
+        "kind": project.kind or PROJECT_KIND_PRODUCT,
+    }
+
+
 def file_location_payload(file_obj):
     folder = file_obj.folder
     if not folder:
         return None
     region = folder.region
     project = region.project if region else None
+    kind = (project.kind if project else None) or PROJECT_KIND_PRODUCT
     return {
         "project_id": project.id if project else None,
         "project_name": project.name if project else None,
+        "project_kind": kind,
         "region_id": region.id if region else None,
         "region_name": region.name if region else None,
         "region_label": region_label(region.name) if region else None,
@@ -391,6 +409,7 @@ def ensure_schema():
     db.create_all()
     file_cols = _table_columns("file")
     al_cols = _table_columns("audit_log")
+    project_cols = _table_columns("project") if inspect(db.engine).has_table("project") else set()
     alters = []
     if "folder_id" not in file_cols:
         alters.append("ALTER TABLE file ADD COLUMN folder_id INTEGER REFERENCES folder(id)")
@@ -404,9 +423,16 @@ def ensure_schema():
         alters.append("ALTER TABLE audit_log ADD COLUMN target_type VARCHAR(32)")
     if "target_id" not in al_cols:
         alters.append("ALTER TABLE audit_log ADD COLUMN target_id INTEGER")
+    if "kind" not in project_cols:
+        alters.append("ALTER TABLE project ADD COLUMN kind VARCHAR(20) DEFAULT 'product'")
     for stmt in alters:
         db.session.execute(text(stmt))
     if alters:
+        db.session.commit()
+    if inspect(db.engine).has_table("project"):
+        db.session.execute(text(
+            "UPDATE project SET kind = :kind WHERE kind IS NULL OR kind = ''"
+        ), {"kind": PROJECT_KIND_PRODUCT})
         db.session.commit()
 
 
@@ -681,6 +707,38 @@ def folder_ancestors(folder):
     return chain
 
 
+def seed_qms_library():
+    """Company-level QMS root: not a product project, not China/FDA regions."""
+    p = Project.query.filter_by(kind=PROJECT_KIND_QMS).first()
+    if not p:
+        p = Project.query.filter_by(name=QMS_PROJECT_NAME).first()
+    if not p:
+        p = Project(name=QMS_PROJECT_NAME, kind=PROJECT_KIND_QMS)
+        db.session.add(p)
+        db.session.flush()
+    else:
+        p.kind = PROJECT_KIND_QMS
+        if p.name != QMS_PROJECT_NAME:
+            taken = Project.query.filter_by(name=QMS_PROJECT_NAME).first()
+            if not taken:
+                p.name = QMS_PROJECT_NAME
+    r = Region.query.filter_by(project_id=p.id, name=QMS_REGION_NAME).first()
+    if not r:
+        r = Region.query.filter_by(project_id=p.id).first()
+    if not r:
+        r = Region(name=QMS_REGION_NAME, project=p)
+        db.session.add(r)
+        db.session.flush()
+    else:
+        r.name = QMS_REGION_NAME
+    for fname in QMS_ROOT_FOLDERS:
+        if not Folder.query.filter_by(name=fname, region_id=r.id, parent_id=None).first():
+            db.session.add(Folder(
+                name=fname, region_id=r.id, parent_id=None, created_by="admin"
+            ))
+    return p, r
+
+
 def seed_if_needed():
     if not User.query.filter_by(username="admin").first():
         admin = User(username="admin", email="admin@example.com", role="admin")
@@ -706,9 +764,11 @@ def seed_if_needed():
     for pname, region_names in project_specs:
         p = Project.query.filter_by(name=pname).first()
         if not p:
-            p = Project(name=pname)
+            p = Project(name=pname, kind=PROJECT_KIND_PRODUCT)
             db.session.add(p)
             db.session.flush()
+        elif not p.kind:
+            p.kind = PROJECT_KIND_PRODUCT
         for rname in region_names:
             r = Region.query.filter_by(name=rname, project_id=p.id).first()
             if not r:
@@ -721,9 +781,17 @@ def seed_if_needed():
                         name=fname, region_id=r.id, parent_id=None, created_by="admin"
                     ))
     db.session.flush()
+    seed_qms_library()
+    db.session.flush()
 
     if not File.query.first():
-        folders = Folder.query.order_by(Folder.id.asc()).all()
+        folders = (
+            Folder.query.join(Region, Folder.region_id == Region.id)
+            .join(Project, Region.project_id == Project.id)
+            .filter(Project.kind == PROJECT_KIND_PRODUCT)
+            .order_by(Folder.id.asc())
+            .all()
+        )
         for idx, folder in enumerate(folders):
             created = []
             for n, doc_name in enumerate(("文件 A", "文件 B"), start=1):
@@ -835,8 +903,34 @@ def api_me():
 @app.get("/api/projects")
 @login_required
 def api_projects():
-    data = [{"id": p.id, "name": p.name} for p in Project.query.order_by(Project.id.asc()).all()]
-    return jsonify({"ok": True, "projects": data})
+    kind = (request.args.get("kind") or PROJECT_KIND_PRODUCT).strip().lower()
+    q = Project.query
+    if kind not in ("all", "*"):
+        q = q.filter_by(kind=kind)
+    data = [serialize_project(p) for p in q.order_by(Project.id.asc()).all()]
+    return jsonify({"ok": True, "kind": kind, "projects": data})
+
+
+@app.get("/api/qms")
+@login_required
+def api_qms_root():
+    p, r = seed_qms_library()
+    db.session.commit()
+    folders = [
+        serialize_folder(f)
+        for f in Folder.query.filter_by(region_id=r.id, parent_id=None).order_by(Folder.id.asc()).all()
+    ]
+    return jsonify({
+        "ok": True,
+        "project": serialize_project(p),
+        "region": {
+            "id": r.id,
+            "name": r.name,
+            "label": region_label(r.name),
+            "project_id": p.id,
+        },
+        "folders": folders,
+    })
 
 
 @app.get("/api/regions")
@@ -1055,9 +1149,13 @@ def api_search():
         .join(Project, Region.project_id == Project.id)
         .filter(func.lower(Folder.name).like(pattern))
     )
+    kind = (request.args.get("kind") or "").strip().lower()
     if project_id:
         file_q = file_q.filter(Project.id == project_id)
         folder_q = folder_q.filter(Project.id == project_id)
+    elif kind in (PROJECT_KIND_PRODUCT, PROJECT_KIND_QMS):
+        file_q = file_q.filter(Project.kind == kind)
+        folder_q = folder_q.filter(Project.kind == kind)
 
     files_out = []
     for f in file_q.order_by(File.name.asc()).limit(limit).all():
@@ -1082,6 +1180,7 @@ def api_search():
             "location": {
                 "project_id": project.id if project else None,
                 "project_name": project.name if project else None,
+                "project_kind": (project.kind if project else None) or PROJECT_KIND_PRODUCT,
                 "region_id": region.id if region else None,
                 "region_name": region.name if region else None,
                 "region_label": region_label(region.name) if region else None,

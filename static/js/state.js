@@ -1,5 +1,6 @@
 const STATE = {
   view: 'inbox',
+  library: 'product',
   project: '项目 1',
   projectId: null,
   region: 'China',

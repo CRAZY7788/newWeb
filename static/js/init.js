@@ -23,7 +23,17 @@ async function boot(){
       STATE.groupId = null;
     }
     try{
-      if(back==='board') await loadBoard(STATE.projectId);
+      if(back==='board'){
+        STATE.library = 'product';
+        syncLibraryChrome();
+        await loadBoard(STATE.projectId);
+        show('board');
+        return;
+      }
+      if(back==='qms-root'){
+        await openQmsLibrary();
+        return;
+      }
       if(back==='detail') await populateDetail(STATE.regionId, STATE.region, STATE.regionLabel);
       if(back==='files' && STATE.groupId) await openFiles(STATE.groupId, STATE.group);
       show(back);

@@ -63,6 +63,7 @@ function escapeAttr(s){
 async function runSearch(q){
   const params = new URLSearchParams({ q });
   if(STATE.projectId) params.set('project_id', STATE.projectId);
+  if(STATE.library) params.set('kind', STATE.library);
   const json = await api('/api/search?' + params.toString());
   lastSearchQuery = q;
   renderSearchResults(json);
@@ -74,6 +75,7 @@ async function navigateToSearchFile(fileId, name, loc){
     return;
   }
   hideSearchPanel();
+  STATE.library = loc.project_kind === 'qms' ? 'qms' : 'product';
   STATE.projectId = loc.project_id;
   STATE.project = loc.project_name;
   STATE.regionId = loc.region_id;
@@ -81,6 +83,7 @@ async function navigateToSearchFile(fileId, name, loc){
   STATE.regionLabel = loc.region_label || loc.region_name;
   STATE.currentFolderId = loc.folder_id;
   STATE.groupId = loc.folder_id;
+  syncLibraryChrome();
   const segs = (loc.folder_path || '').split(' / ');
   STATE.group = segs[segs.length - 1] || loc.folder_path;
   try{
@@ -100,6 +103,7 @@ async function navigateToSearchFolder(loc){
     return;
   }
   hideSearchPanel();
+  STATE.library = loc.project_kind === 'qms' ? 'qms' : 'product';
   STATE.projectId = loc.project_id;
   STATE.project = loc.project_name;
   STATE.regionId = loc.region_id;
@@ -107,6 +111,7 @@ async function navigateToSearchFolder(loc){
   STATE.regionLabel = loc.region_label || loc.region_name;
   STATE.currentFolderId = loc.folder_id;
   STATE.groupId = null;
+  syncLibraryChrome();
   STATE.group = null;
   try{
     const meta = await api('/api/folders/' + loc.folder_id);
@@ -171,7 +176,7 @@ searchPanel?.addEventListener('click', async (e) => {
     if(kind === 'file'){
       const fileId = Number(btn.dataset.fileId);
       const name = btn.dataset.name || '';
-      const json = await api('/api/search?q=' + encodeURIComponent(searchInput.value.trim()) + (STATE.projectId ? '&project_id=' + STATE.projectId : ''));
+      const json = await api('/api/search?q=' + encodeURIComponent(searchInput.value.trim()) + (STATE.projectId ? '&project_id=' + STATE.projectId : '') + (STATE.library ? '&kind=' + STATE.library : ''));
       const hit = (json.files || []).find(x => x.id === fileId);
       if(hit){
         await navigateToSearchFile(fileId, name, hit.location);
@@ -180,7 +185,7 @@ searchPanel?.addEventListener('click', async (e) => {
       }
     }else if(kind === 'folder'){
       const folderId = Number(btn.dataset.folderId);
-      const json = await api('/api/search?q=' + encodeURIComponent(searchInput.value.trim()) + (STATE.projectId ? '&project_id=' + STATE.projectId : ''));
+      const json = await api('/api/search?q=' + encodeURIComponent(searchInput.value.trim()) + (STATE.projectId ? '&project_id=' + STATE.projectId : '') + (STATE.library ? '&kind=' + STATE.library : ''));
       const hit = (json.folders || []).find(x => x.id === folderId);
       if(hit){
         await navigateToSearchFolder(hit.location);
